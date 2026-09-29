@@ -7,6 +7,8 @@ import type { InlineKeyboardButton } from "grammy/types";
 import { isItemType, type Item } from "@/core/domain/item";
 import { extractFromEntities, extractUrls } from "@/core/extract-urls";
 import type { StashRuntime } from "@/core/runtime";
+import { rankBySimilarity, similarityFieldsOfItem } from "@/core/similarity";
+import { normalizeUrl, youtubeVideoId } from "@/core/url";
 import type { ItemFilters, PagedItemFilters } from "@/db/repositories/items";
 import {
   createdMessage,
@@ -27,7 +29,7 @@ import {
  *    documento viene archiviato dalla pipeline condivisa; la risposta è
  *    immediata (dedup + tag), i metadati arrivano in background.
  * 3. Menu: /cerca (con inline keyboard: apri, elimina, paginazione),
- *    /recenti, /lucky, /tag, /stat, /aiuto.
+ *    /recenti, /lucky, /tag, /stat, /scarica (wizard download video), /aiuto.
  * 4. Inline mode: @tuobot <query> suggerisce gli item in qualunque chat.
  *
  * La factory è pura rispetto alla rete: riceve runtime e opzioni, così i
@@ -38,6 +40,7 @@ const SEARCH_PAGE_SIZE = 5;
 const LUCKY_SIZE = 10;
 const MAX_LINKS_PER_MESSAGE = 3;
 const MAX_TELEGRAM_DOWNLOAD = 20 * 1024 * 1024; // limite Bot API getFile
+const DOWNLOAD_PAGE_SIZE = 8;
 
 export interface StashBotOptions {
   runtime: StashRuntime;
@@ -51,8 +54,15 @@ interface SearchState {
   total: number;
 }
 
+/** Sessione del wizard /scarica: risultati e query (per header e paginazione). */
+interface DownloadSession {
+  items: Item[];
+  query?: string;
+}
+
 export const BOT_COMMANDS = [
   { command: "cerca", description: "Cerca nell'archivio (es. /cerca rust #guide)" },
+  { command: "scarica", description: "Scarica un video YouTube e invialo in chat" },
   { command: "recenti", description: "Ultimi item archiviati" },
   { command: "lucky", description: "10 item a caso tra i non visti" },
   { command: "tag", description: "I tag più usati" },
@@ -64,6 +74,8 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
   const bot = new Bot(botToken);
   const { runtime, webAppUrl } = options;
   const searchSessions = new Map<string, SearchState>();
+  const downloadSessions = new Map<string, DownloadSession>();
+  const pendingKeywordUsers = new Set<number>();
 
   // ── Middleware: allowlist, sempre per primo ────────────────────────────
   bot.use(async (ctx, next) => {
@@ -112,11 +124,44 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
     await sendSearchPage(ctx, filters, 0);
   });
 
+  bot.command("scarica", async (ctx) => {
+    const args = (ctx.message?.text ?? "").replace(/^\/scarica(@\w+)?\s*/i, "").trim();
+    if (args) {
+      await startDirectDownload(ctx, args);
+      return;
+    }
+    await ctx.reply(
+      ["⬇️ <b>Scarica un video</b>", "", "Scegli come trovarlo, oppure manda direttamente:", "/scarica https://youtu.be/…"].join("\n"),
+      {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🎬 Ultimi 20 video archiviati", callback_data: "dlwiz:recent" }],
+            [{ text: "🔎 Cerca per parola chiave", callback_data: "dlwiz:search" }],
+          ],
+        },
+      },
+    );
+  });
+
   // ── Dump: documenti e link ─────────────────────────────────────────────
   bot.on("message:document", (ctx) => handleDocument(ctx));
 
   bot.on(["message:photo", "message:video", "message:audio", "message:voice", "message:animation"], (ctx) => {
     return ctx.reply("📤 I file multimediali non sono ancora supportati: per ora Stash archivia link e documenti.");
+  });
+
+  // Parola chiave del wizard /scarica: va intercettata PRIMA del dump.
+  bot.on("message:text", async (ctx, next) => {
+    const userId = ctx.from?.id;
+    const text = ctx.message?.text ?? "";
+    if (!userId || !pendingKeywordUsers.has(userId)) return next();
+    if (text.startsWith("/") || extractUrls(text).length > 0) {
+      pendingKeywordUsers.delete(userId);
+      return next();
+    }
+    pendingKeywordUsers.delete(userId);
+    await sendDownloadResults(ctx, text);
   });
 
   bot.on("message", (ctx) => handleTextDump(ctx));
@@ -158,6 +203,58 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
 
   bot.callbackQuery("deln", async (ctx) => {
     await ctx.answerCallbackQuery("Annullato.");
+  });
+
+  // ── Callback: wizard download video ────────────────────────────────────
+  bot.callbackQuery("dlwiz:recent", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const videos = runtime.items.list({ youtube: true, limit: 20, offset: 0 }).items;
+    if (videos.length === 0) {
+      await ctx.reply("Archivio senza video YouTube: mandamene uno e riprova.");
+      return;
+    }
+    await sendDownloadResults(ctx, undefined, videos);
+  });
+
+  bot.callbackQuery("dlwiz:search", async (ctx) => {
+    if (ctx.from) pendingKeywordUsers.add(ctx.from.id);
+    await ctx.answerCallbackQuery();
+    await ctx.reply("✍️ Scrivi la parola chiave da cercare tra i video archiviati.");
+  });
+
+  bot.callbackQuery(/^dlpg:(\w+):(\d+)$/, async (ctx) => {
+    const [, sessionId, pageRaw] = ctx.match;
+    const session = downloadSessions.get(sessionId);
+    if (!session) {
+      await ctx.answerCallbackQuery("Ricerca scaduta: rifai /scarica.");
+      return;
+    }
+    await ctx.answerCallbackQuery();
+    await sendDownloadResults(ctx, session.query, session.items, Number.parseInt(pageRaw, 10), sessionId);
+  });
+
+  bot.callbackQuery(/^dlgo:(\w+):(\d+)$/, async (ctx) => {
+    const [, sessionId, indexRaw] = ctx.match;
+    const session = downloadSessions.get(sessionId);
+    const item = session?.items[Number.parseInt(indexRaw, 10)];
+    if (!item) {
+      await ctx.answerCallbackQuery("Ricerca scaduta: rifai /scarica.");
+      return;
+    }
+    const result = runtime.videoDownload.start({
+      itemId: item.id,
+      chatId: String(ctx.chat?.id ?? ctx.from?.id ?? ""),
+      source: "telegram",
+    });
+    if (!result.ok) {
+      await ctx.answerCallbackQuery({ text: truncate(result.error, 180), show_alert: true });
+      return;
+    }
+    await ctx.answerCallbackQuery("Download avviato ⬇️");
+    const title = item.title ?? item.canonicalUrl ?? `#${item.id}`;
+    await ctx.reply(`⬇️ <b>Download avviato</b>\n${escapeHtml(truncate(title, 120))}\n<i>Te lo mando qui appena pronto.</i>`, {
+      parse_mode: "HTML",
+    });
   });
 
   // ── Inline mode: @tuobot <query> ───────────────────────────────────────
@@ -222,6 +319,92 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
 
   function itemLink(item: Item): string {
     return item.url ?? item.canonicalUrl ?? `${webAppUrl}/item/${item.id}`;
+  }
+
+  /** /scarica <url>: valida il link YouTube e avvia il job sulla chat corrente. */
+  async function startDirectDownload(ctx: Context, args: string): Promise<void> {
+    const url = extractUrls(args)[0] ?? args.split(/\s+/)[0] ?? "";
+    const canonical = normalizeUrl(url);
+    const videoId = canonical ? youtubeVideoId(new URL(canonical)) : null;
+    if (!videoId) {
+      await ctx.reply("Serve un link YouTube valido: /scarica https://youtu.be/…");
+      return;
+    }
+    const result = runtime.videoDownload.start({
+      url,
+      chatId: String(ctx.chat?.id ?? ctx.from?.id ?? ""),
+      source: "telegram",
+      sourceRef: ctx.from
+        ? { chatId: String(ctx.chat?.id ?? ctx.from.id), messageId: ctx.message?.message_id }
+        : undefined,
+    });
+    if (!result.ok) {
+      await ctx.reply(`⚠️ ${escapeHtml(result.error)}`);
+      return;
+    }
+    await ctx.reply(`⬇️ <b>Download avviato</b>\n${escapeHtml(canonical ?? url)}\n<i>Lo archivio e te lo mando qui appena pronto.</i>`, {
+      parse_mode: "HTML",
+    });
+  }
+
+  /**
+   * Risultati del wizard /scarica: lista testuale (titolo + canale) con
+   * bottoni numerati che avviano il download. `query` undefined = elenco
+   * recenti; con query si usa la ricerca "simile" (max 30 risultati).
+   */
+  async function sendDownloadResults(
+    ctx: Context,
+    query?: string,
+    preset?: Item[],
+    page = 0,
+    reuseSessionId?: string,
+  ): Promise<void> {
+    let items: Item[];
+    if (preset) {
+      items = preset;
+    } else {
+      const videos = runtime.items.list({ youtube: true, limit: 2000, offset: 0 }).items;
+      items = rankBySimilarity(videos, query ?? "", similarityFieldsOfItem, 30).map((entry) => entry.item);
+    }
+    const header =
+      query !== undefined
+        ? `🔎 <b>Video simili a «${escapeHtml(truncate(query, 60))}»</b> — ${items.length} risultati`
+        : `🎬 <b>Ultimi video archiviati</b> — ${items.length}`;
+
+    if (items.length === 0) {
+      await ctx.reply(query ? "Nessun video simile: prova un'altra parola." : "Nessun video YouTube in archivio.");
+      return;
+    }
+
+    const sessionId = reuseSessionId ?? randomBytes(4).toString("hex");
+    if (!reuseSessionId) downloadSessions.set(sessionId, { items, query });
+
+    const pages = Math.max(1, Math.ceil(items.length / DOWNLOAD_PAGE_SIZE));
+    const slice = items.slice(page * DOWNLOAD_PAGE_SIZE, (page + 1) * DOWNLOAD_PAGE_SIZE);
+
+    const keyboard: InlineKeyboardButton[][] = slice.map((item, i) => [
+      {
+        text: truncate(`${page * DOWNLOAD_PAGE_SIZE + i + 1}. ${item.title ?? `#${item.id}`}`, 44),
+        callback_data: `dlgo:${sessionId}:${page * DOWNLOAD_PAGE_SIZE + i}`,
+      },
+    ]);
+    const nav: { text: string; callback_data: string }[] = [];
+    if (page > 0) nav.push({ text: "◀︎", callback_data: `dlpg:${sessionId}:${page - 1}` });
+    if (page < pages - 1) nav.push({ text: "▶︎", callback_data: `dlpg:${sessionId}:${page + 1}` });
+    if (nav.length > 0) keyboard.push(nav);
+
+    const body = slice
+      .map((item, i) => {
+        const channel = item.authorName ? ` · ${escapeHtml(truncate(item.authorName, 40))}` : "";
+        const local = item.filePath ? " · 📦" : "";
+        return `${page * DOWNLOAD_PAGE_SIZE + i + 1}. ${escapeHtml(truncate(item.title ?? `#${item.id}`, 80))}${channel}${local}`;
+      })
+      .join("\n");
+
+    await ctx.reply(`${header} (pagina ${page + 1}/${pages})\n\n${body}`, {
+      parse_mode: "HTML",
+      reply_markup: { inline_keyboard: keyboard },
+    });
   }
 
   async function handleTextDump(ctx: Context): Promise<void> {

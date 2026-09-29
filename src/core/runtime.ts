@@ -1,10 +1,12 @@
 import { dataDir } from "@/config/env";
+import { telegramToken, ytDlpPath } from "@/config/env";
 import type { DatabaseHandle } from "@/db/connection";
 import { getDatabase } from "@/db";
 import { ItemsRepository } from "@/db/repositories/items";
 import { FileStore } from "@/core/files";
 import { IngestionService } from "@/core/ingestion";
 import { MetadataFetcher } from "@/core/metadata";
+import { VideoDownloadService } from "@/core/video-download";
 
 /*
  * Flow: il "composition root" del dominio. Bot, web e import costruiscono i
@@ -20,15 +22,26 @@ export interface StashRuntime {
   files: FileStore;
   metadata: MetadataFetcher;
   ingestion: IngestionService;
+  videoDownload: VideoDownloadService;
 }
 
-export function createRuntime(rootDir: string, db?: DatabaseHandle): StashRuntime {
+export function createRuntime(
+  rootDir: string,
+  db?: DatabaseHandle,
+  videoDownload?: VideoDownloadService,
+): StashRuntime {
   const handle = db ?? getDatabase();
   const files = new FileStore(rootDir);
   const items = new ItemsRepository(handle);
   const metadata = new MetadataFetcher(files);
   const ingestion = new IngestionService(items, files, metadata);
-  return { db: handle, items, files, metadata, ingestion };
+  const downloads =
+    videoDownload ??
+    new VideoDownloadService(items, files, ingestion, {
+      ytDlpPath: ytDlpPath(),
+      botToken: telegramToken(),
+    });
+  return { db: handle, items, files, metadata, ingestion, videoDownload: downloads };
 }
 
 const globalForRuntime = globalThis as unknown as { __stashRuntime?: StashRuntime };

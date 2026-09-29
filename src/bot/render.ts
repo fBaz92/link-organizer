@@ -55,6 +55,7 @@ export function helpMessage(webAppUrl: string): string {
     "",
     "<b>Comandi</b>",
     "/cerca &lt;testo&gt; — cerca nell'archivio (filtri: #tag, tipo:video)",
+    "/scarica [link] — scarica un video YouTube e te lo manda qui (senza link apre il wizard: ultimi 20 o parola chiave)",
     "/recenti — ultime aggiunte",
     "/lucky [#tag] — 10 estrazioni a caso tra i non visti",
     "/tag — i tuoi tag più usati",

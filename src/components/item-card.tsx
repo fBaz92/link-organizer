@@ -1,12 +1,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { FileText, Star, Tv } from "lucide-react";
+import type { ReactNode } from "react";
 import type { Item } from "@/core/domain/item";
 import { ITEM_TYPE_LABELS } from "@/core/domain/item";
 import { youtubeThumbnailUrl } from "@/core/url";
 import { Badge } from "@/components/ui/badge";
+import { SeenTick } from "@/components/seen-tick";
 import { domainOf, relativeDate } from "@/lib/format";
-import { cn } from "@/lib/utils";
 
 /*
  * Flow: card di un item nell'archivio (server component).
@@ -97,6 +98,7 @@ export function ItemCard({ item, priority = false }: { item: Item; priority?: bo
               className="object-cover"
             />
           )}
+          <SeenTick itemId={item.id} seen={item.seen} className="absolute right-2 top-2 z-10" />
         </div>
         <div className="flex flex-1 flex-col gap-1 p-3">
           <TitleLink itemId={item.id} title={title} starred={item.starred} />
@@ -114,7 +116,7 @@ export function ItemCard({ item, priority = false }: { item: Item; priority?: bo
         </div>
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <TitleLink itemId={item.id} title={title} starred={item.starred} />
+        <TitleLink itemId={item.id} title={title} starred={item.starred} action={<SeenTick itemId={item.id} seen={item.seen} />} />
         {body}
       </div>
     </div>
@@ -122,8 +124,19 @@ export function ItemCard({ item, priority = false }: { item: Item; priority?: bo
 }
 
 /** Il link al dettaglio si estende su tutta la card (pattern stretch-link);
- * la stella preferito viaggia accanto al titolo. */
-function TitleLink({ itemId, title, starred }: { itemId: number; title: string; starred: boolean }) {
+ * la stella preferito viaggia accanto al titolo, l'eventuale azione (tick
+ * "visto") resta sopra lo stretch-link per restare cliccabile. */
+function TitleLink({
+  itemId,
+  title,
+  starred,
+  action,
+}: {
+  itemId: number;
+  title: string;
+  starred: boolean;
+  action?: ReactNode;
+}) {
   return (
     <div className="flex items-start justify-between gap-2">
       <h3>
@@ -134,7 +147,12 @@ function TitleLink({ itemId, title, starred }: { itemId: number; title: string; 
           {title}
         </Link>
       </h3>
-      {starred && <Star className="size-4 shrink-0 fill-amber-400 text-amber-400" aria-label="Preferito" />}
+      {(starred || action) && (
+        <div className="relative z-10 flex shrink-0 items-center gap-1.5 pt-0.5">
+          {starred && <Star className="size-4 fill-amber-400 text-amber-400" aria-label="Preferito" />}
+          {action}
+        </div>
+      )}
     </div>
   );
 }

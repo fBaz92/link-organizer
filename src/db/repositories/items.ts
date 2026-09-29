@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, like, sql } from "drizzle-orm";
 import type { Item, ItemSource, ItemType, SourceRef } from "@/core/domain/item";
 import { isItemType } from "@/core/domain/item";
 import type { DatabaseHandle, Db, RawSqlite } from "../connection";
@@ -28,6 +28,8 @@ export interface ItemFilters {
   starred?: boolean;
   /** Canale/autore (per author_url, identità canonica). */
   author?: string;
+  /** true = solo i video YouTube (canonical_url "https://youtu.be/<id>"). */
+  youtube?: boolean;
 }
 
 export interface PagedItemFilters extends ItemFilters {
@@ -82,6 +84,10 @@ export interface ItemPatch {
   description?: string;
   notes?: string;
   thumbnailPath?: string;
+  filePath?: string;
+  fileName?: string;
+  mimeType?: string;
+  fileHash?: string;
   authorName?: string;
   authorUrl?: string;
   seen?: boolean;
@@ -167,6 +173,10 @@ export class ItemsRepository {
     if (patch.description !== undefined) set.description = patch.description;
     if (patch.notes !== undefined) set.notes = patch.notes;
     if (patch.thumbnailPath !== undefined) set.thumbnailPath = patch.thumbnailPath;
+    if (patch.filePath !== undefined) set.filePath = patch.filePath;
+    if (patch.fileName !== undefined) set.fileName = patch.fileName;
+    if (patch.mimeType !== undefined) set.mimeType = patch.mimeType;
+    if (patch.fileHash !== undefined) set.fileHash = patch.fileHash;
     if (patch.authorName !== undefined) set.authorName = patch.authorName;
     if (patch.authorUrl !== undefined) set.authorUrl = patch.authorUrl;
     if (patch.seen !== undefined) set.seen = patch.seen ? 1 : 0;
@@ -309,6 +319,7 @@ export class ItemsRepository {
     if (filters.seen !== undefined && skip !== "stato") conditions.push(eq(items.seen, filters.seen ? 1 : 0));
     if (filters.starred && skip !== "stato") conditions.push(eq(items.starred, 1));
     if (filters.author && skip !== "author") conditions.push(eq(items.authorUrl, filters.author));
+    if (filters.youtube) conditions.push(like(items.canonicalUrl, "https://youtu.be/%"));
     if (filters.tag) {
       conditions.push(
         sql`items.id IN (

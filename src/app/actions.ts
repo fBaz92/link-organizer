@@ -6,13 +6,15 @@ import { writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { assertAuthenticated, setSessionCookie, clearSessionCookie, authEnabled, verifySessionValue } from "@/lib/auth";
+import { telegramUploadChatId } from "@/config/env";
 import { getRuntime } from "@/core/runtime";
 import { logger } from "@/core/logger";
-import { normalizeUrl } from "@/core/url";
-import type { ItemType } from "@/core/domain/item";
+import { normalizeUrl, youtubeThumbnailUrl } from "@/core/url";
+import { rankBySimilarity, similarityFieldsOfItem } from "@/core/similarity";
+import type { Item, ItemType } from "@/core/domain/item";
 
 /*
- * Flow: le server actions sono l'unica porta di scrittura della web UI.
+ * Flow: le server action sono l'unica porta di scrittura della web UI.
  * Tutte (tranne login) verificano la sessione PRIMA di toccare dati, poi
  * delegano al dominio condiviso (stessa IngestionService del bot) e
  * invalidano le pagine RSC interessate. I risultati sono oggetti
@@ -170,6 +172,101 @@ export async function deleteItemAction(itemId: number): Promise<void> {
   }
   refreshItemPaths();
   redirect("/");
+}
+
+// ── Download video YouTube ───────────────────────────────────────────────
+
+/** Riga risultato del wizard di download (ultimo 20 / parola chiave). */
+export interface VideoSearchHit {
+  id: number;
+  title: string;
+  channel: string | null;
+  /** Punteggio di somiglianza 0..1: presente solo nella ricerca per keyword. */
+  score?: number;
+  /** true se il file video è già nello store (basterà l'invio su Telegram). */
+  downloaded: boolean;
+  /** Anteprima 16:9: copia locale se c'è, altrimenti la thumbnail YouTube. */
+  thumbUrl: string | null;
+}
+
+/** Base del wizard: i video YouTube dell'archivio, dai più recenti. */
+export async function latestArchiveVideosAction(): Promise<VideoSearchHit[]> {
+  if (!(await assertAuthenticated())) return [];
+  const { items } = getRuntime();
+  return items
+    .list({ youtube: true, limit: 20, offset: 0 })
+    .items.map(videoSearchHit);
+}
+
+/**
+ * Ricerca "simile" tra i video YouTube archiviati: ranking fuzzy su titolo,
+ * canale e tag (vedi core/similarity.ts), limitata ai primi 30 risultati.
+ */
+export async function searchArchiveVideosAction(query: string): Promise<VideoSearchHit[]> {
+  if (!(await assertAuthenticated())) return [];
+  const q = query.trim();
+  if (q.length < 2) return [];
+
+  const { items } = getRuntime();
+  // Base ampia: l'archivio è personale, qualche migliaio di righe è ok.
+  const videos = items.list({ youtube: true, limit: 2000, offset: 0 }).items;
+  return rankBySimilarity(videos, q, similarityFieldsOfItem, 30).map(({ item, score }) => ({
+    ...videoSearchHit(item),
+    score: Math.round(score * 100) / 100,
+  }));
+}
+
+export async function startVideoDownloadByItemAction(itemId: number): Promise<ActionResult & { jobId?: string }> {
+  if (!(await assertAuthenticated())) return { ok: false, message: "Sessione scaduta." };
+
+  const chatId = telegramUploadChatId();
+  if (!chatId) {
+    return {
+      ok: false,
+      message: "Configura TELEGRAM_UPLOAD_CHAT_ID (o TELEGRAM_ALLOWED_USER_IDS) per ricevere i video.",
+    };
+  }
+
+  const { videoDownload } = getRuntime();
+  const result = videoDownload.start({ itemId, chatId, source: "web" });
+  if (!result.ok) return { ok: false, message: result.error };
+  return { ok: true, message: "Download avviato.", jobId: result.job.id };
+}
+
+export async function startVideoDownloadByUrlAction(url: string): Promise<ActionResult & { jobId?: string }> {
+  if (!(await assertAuthenticated())) return { ok: false, message: "Sessione scaduta." };
+
+  const trimmed = url.trim();
+  const canonical = normalizeUrl(trimmed);
+  if (!canonical || !/^https:\/\/youtu\.be\//.test(canonical)) {
+    return { ok: false, message: "Serve un link YouTube valido (per ora si scarica solo da YouTube)." };
+  }
+
+  const chatId = telegramUploadChatId();
+  if (!chatId) {
+    return {
+      ok: false,
+      message: "Configura TELEGRAM_UPLOAD_CHAT_ID (o TELEGRAM_ALLOWED_USER_IDS) per ricevere i video.",
+    };
+  }
+
+  const { videoDownload } = getRuntime();
+  const result = videoDownload.start({ url: trimmed, chatId, source: "web" });
+  if (!result.ok) return { ok: false, message: result.error };
+  refreshItemPaths(result.job.itemId ?? undefined);
+  return { ok: true, message: "Download avviato.", jobId: result.job.id };
+}
+
+function videoSearchHit(item: Item): VideoSearchHit {
+  return {
+    id: item.id,
+    title: item.title ?? item.fileName ?? `Item #${item.id}`,
+    channel: item.authorName ?? null,
+    downloaded: Boolean(item.filePath),
+    thumbUrl: item.thumbnailPath
+      ? `/api/thumbs/${item.id}`
+      : (youtubeThumbnailUrl(item.canonicalUrl ?? item.url ?? "") ?? null),
+  };
 }
 
 export type { ItemType };

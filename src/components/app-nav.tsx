@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Archive, CircleHelp, Dices, Tags } from "lucide-react";
+import { Archive, CircleHelp, Dices, Download, Tags } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /*
@@ -12,7 +12,8 @@ import { cn } from "@/lib/utils";
  */
 const NAV_ITEMS = [
   { href: "/", label: "Archivio", icon: Archive },
-  { href: "/lucky", label: "Mi sento fortunato", icon: Dices },
+  { href: "/scarica", label: "Scarica video", icon: Download },
+  { href: "/lucky", label: "Fortuna", icon: Dices },
   { href: "/tags", label: "Tag", icon: Tags },
   { href: "/aiuto", label: "Aiuto", icon: CircleHelp },
 ] as const;

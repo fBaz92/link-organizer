@@ -35,3 +35,18 @@ export function webPassword(): string | undefined {
 export function webAppUrl(): string {
   return (process.env.WEB_APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 }
+
+/** Eseguibile yt-dlp per il download dei video (default: cerca nel PATH). */
+export function ytDlpPath(): string {
+  return process.env.YTDLP_PATH?.trim() || "yt-dlp";
+}
+
+/**
+ * Chat Telegram che riceve i video scaricati dalla web UI. Default: il
+ * primo user ID autorizzato (il proprietario, in un tool personale).
+ */
+export function telegramUploadChatId(): string | undefined {
+  const explicit = process.env.TELEGRAM_UPLOAD_CHAT_ID?.trim();
+  if (explicit) return explicit;
+  return allowedUserIds()[0] !== undefined ? String(allowedUserIds()[0]) : undefined;
+}

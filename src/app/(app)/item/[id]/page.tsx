@@ -5,6 +5,7 @@ import { ITEM_TYPE_LABELS } from "@/core/domain/item";
 import { getRuntime } from "@/core/runtime";
 import { reclassifyAction } from "@/app/actions";
 import { fullDate, formatBytes, domainOf, SOURCE_LABELS } from "@/lib/format";
+import { youtubeVideoId } from "@/core/url";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -13,6 +14,7 @@ import { FlagToggles } from "@/components/flag-toggles";
 import { TagEditor } from "@/components/tag-editor";
 import { NotesEditor } from "@/components/notes-editor";
 import { DeleteButton } from "@/components/delete-button";
+import { ItemVideoDownloadButton } from "@/components/item-video-download-button";
 
 /*
  * Flow: pagina dettaglio di un item. Colonna lettura al centro (titolo,
@@ -29,6 +31,13 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
   if (!item) notFound();
 
   const domain = domainOf(item.url ?? item.canonicalUrl);
+  const isYoutubeVideo = (() => {
+    try {
+      return Boolean(youtubeVideoId(new URL(item.canonicalUrl ?? item.url ?? "")));
+    } catch {
+      return false;
+    }
+  })();
 
   return (
     <article className="mx-auto max-w-3xl space-y-6">
@@ -96,6 +105,7 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
               Scarica file
             </Button>
           )}
+          {isYoutubeVideo && !item.filePath && <ItemVideoDownloadButton itemId={item.id} />}
           {item.url && !item.thumbnailPath && (
             <form action={reclassifyAction.bind(null, item.id)}>
               <Button type="submit" size="sm" variant="outline" className="cursor-pointer">
