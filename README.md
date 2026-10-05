@@ -87,6 +87,22 @@ pnpm import:telegram ~/Downloads/TelegramExport --meta   # arricchisce anche tit
 
 La pipeline è la stessa del bot: i link già presenti vengono riconosciuti come duplicati e saltati.
 
+## Tag automatici: regole + semantica
+
+L'auto-tag lavora su due livelli che si **sommano** ai tag che già esistono (mai li sostituiscono, mai toccano quelli messi a mano):
+
+1. **Regole keyword** (`src/core/rules/tag-rules.ts`): deterministiche, sempre attive, valgono su titolo + descrizione.
+2. **Tag semantici**: un modello di embedding multilingue **locale** (transformers.js/ONNX, ~120 MB scaricati al primo uso, nessuna API key) confronta la descrizione dell'item col vocabolario dell'archivio (le regole + i tag già in uso) e suggerisce i tag semanticamente vicini. Gli embedding dei tag stanno in cache nel data dir: il costo per item è una sola inferenza.
+
+```bash
+pnpm enrich     # 1. arricchisce i metadati (per YouTube: yt-dlp porta la descrizione COMPLETA e i tag dell'autore)
+pnpm auto-tag   # 2. backfill dei tag su tutto l'archivio (keyword + semantici, idempotente)
+```
+
+Per YouTube la descrizione arriva da `yt-dlp --dump-json` (se installato, con fallback automatico su oEmbed): questo porta in regalo anche **i tag dichiarati dall'autore** del video, che entrano nell'archivio così come sono.
+
+Taratura dei tag semantici via `.env`: `SEMANTIC_TAGS=0` per disattivarli, `SEMANTIC_TAGS_THRESHOLD` (default 0.83, calibrata sui dati: le similarità e5 vivono compresse in ~0.75–0.89, quindi soglie basse riempiono gli item di generici; abbassala con cautela), `SEMANTIC_TAGS_TOP_K` (default 5), `SEMANTIC_TAGS_MODEL` (default `Xenova/multilingual-e5-small`). Il semantico non gira sugli item col titolo di fallback (hostname): senza testo vero suggerirebbe solo riempitivi.
+
 ## Architettura (per metterci le mani)
 
 ```
@@ -97,6 +113,8 @@ src/
 │   ├── rules/tag-rules.ts  # LE REGOLE EDITABILI dei tag
 │   ├── ingestion.ts    # pipeline unica (dedup → classificazione → persistenza)
 │   ├── metadata.ts     # oEmbed/OpenGraph con guardia SSRF a ogni redirect
+│   ├── yt-dlp.ts       # metadati completi via yt-dlp --dump-json (YouTube)
+│   ├── semantic-tags.ts  # tag semantici: embedding locale + vocabolario archivio
 │   ├── similarity.ts   # ricerca "simile" (Levenshtein + prefissi + pesi campo)
 │   ├── video-download.ts   # job yt-dlp → store → upload Telegram
 │   ├── security/url-guard.ts  # http/https only, blocco host privati/riservati

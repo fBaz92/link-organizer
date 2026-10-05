@@ -6,6 +6,7 @@ import { ItemsRepository } from "@/db/repositories/items";
 import { FileStore } from "@/core/files";
 import { IngestionService } from "@/core/ingestion";
 import { MetadataFetcher } from "@/core/metadata";
+import { createYtDlpMetadataSource } from "@/core/yt-dlp";
 import { VideoDownloadService } from "@/core/video-download";
 
 /*
@@ -33,7 +34,9 @@ export function createRuntime(
   const handle = db ?? getDatabase();
   const files = new FileStore(rootDir);
   const items = new ItemsRepository(handle);
-  const metadata = new MetadataFetcher(files);
+  // Per YouTube la strategia primaria è yt-dlp (descrizione completa + tag
+  // dell'autore); senza binario cade in automatico sull'oEmbed online.
+  const metadata = new MetadataFetcher(files, fetch, createYtDlpMetadataSource(ytDlpPath()));
   const ingestion = new IngestionService(items, files, metadata);
   const downloads =
     videoDownload ??

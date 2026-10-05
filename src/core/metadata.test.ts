@@ -122,6 +122,78 @@ describe("MetadataFetcher", () => {
     expect(await fetcher.fetch(`https://${HOST}/binario`)).toBeNull();
   });
 
+  it("per YouTube la sorgente video (yt-dlp) vince: descrizione completa e keyword", async () => {
+    const videoSource = {
+      fetch: async () => ({
+        title: "Via yt-dlp",
+        description: "Descrizione completa del video",
+        authorName: "Canale",
+        keywords: ["grid-forming", "power systems"],
+      }),
+    };
+    // Tutte le richieste HTTP rispondono 404: se si cadesse nel fallback
+    // online il risultato sarebbe null e il test fallirebbe.
+    const fetcher = new MetadataFetcher(files, fakeFetcher({}), videoSource);
+
+    const metadata = await fetcher.fetch("https://youtu.be/dQw4w9WgXcQ");
+    expect(metadata?.title).toBe("Via yt-dlp");
+    expect(metadata?.description).toBe("Descrizione completa del video");
+    expect(metadata?.keywords).toEqual(["grid-forming", "power systems"]);
+  });
+
+  it("per YouTube con sorgente video assente cade su oEmbed + og:description", async () => {
+    const fetcher = new MetadataFetcher(
+      files,
+      fakeFetcher({
+        "https://www.youtube.com/oembed?url=https%3A%2F%2Fyoutu.be%2FdQw4w9WgXcQ&format=json": json({
+          title: "Titolo video",
+          author_name: "Canale",
+        }),
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ": `<html><head>
+          <meta property="og:description" content="Descrizione di fallback">
+        </head></html>`,
+      }),
+      { fetch: async () => null },
+    );
+
+    const metadata = await fetcher.fetch("https://youtu.be/dQw4w9WgXcQ");
+    expect(metadata?.title).toBe("Titolo video");
+    expect(metadata?.description).toBe("Descrizione di fallback");
+  });
+
+  it("una sorgente video che rigetta non blocca il fallback online", async () => {
+    const fetcher = new MetadataFetcher(
+      files,
+      fakeFetcher({
+        "https://www.youtube.com/oembed?url=https%3A%2F%2Fyoutu.be%2FdQw4w9WgXcQ&format=json": json({
+          title: "Titolo di riserva",
+        }),
+      }),
+      { fetch: async () => { throw new Error("boom"); } },
+    );
+
+    const metadata = await fetcher.fetch("https://youtu.be/dQw4w9WgXcQ");
+    expect(metadata?.title).toBe("Titolo di riserva");
+  });
+
+  it("la sorgente video non viene consultata per domini non video", async () => {
+    let called = false;
+    const videoSource = {
+      fetch: async () => {
+        called = true;
+        return null;
+      },
+    };
+    const fetcher = new MetadataFetcher(
+      files,
+      fakeFetcher({ [`https://${HOST}/pagina`]: "<html><head><title>Pagina</title></head></html>" }),
+      videoSource,
+    );
+
+    await fetcher.fetch(`https://${HOST}/pagina`);
+    expect(called).toBe(false);
+  });
+
   it("segue i redirect rivalidando la SSRF guard a ogni hop", async () => {
     let hops = 0;
     const fetchImpl = (async (input: string | URL | Request) => {

@@ -1,23 +1,25 @@
 import type { FileStore } from "@/core/files";
 import { UnsafeUrlError, assertSafeRemoteUrl } from "@/core/security/url-guard";
 import { youtubeVideoId } from "@/core/url";
+import type { VideoMetadataSource } from "@/core/yt-dlp";
 
 /*
  * Flow: il fetcher di metadati arricchisce gli item con titolo, descrizione
  * e thumbnail, senza API key.
  *
- * 1. fetch() sceglie la strategia: oEmbed dedicato per YouTube e Vimeo
- *    (JSON pulito), altrimenti fetch dell'HTML con parsing dei tag
- *    OpenGraph e fallback sul <title>. L'oEmbed di YouTube non include la
- *    descrizione: viene integrata dall'og:description della pagina watch.
+ * 1. fetch() sceglie la strategia: per YouTube prima la sorgente video
+ *    iniettabile (yt-dlp --dump-json: descrizione COMPLETA e tag
+ *    dell'autore, senza API key) e in caduta l'oEmbed dedicato con la
+ *    descrizione integrata dall'og:description della pagina watch; Vimeo
+ *    resta su oEmbed, per il resto OpenGraph + fallback sul <title>.
  * 2. OGNI richiesta (URL iniziale, redirect, thumbnail) passa da
  *    assertSafeRemoteUrl(): http/https soltanto, niente host privati —
  *    i redirect vengono seguiti a mano proprio per ricontrollare ogni hop.
  * 3. downloadThumbnail() scarica l'immagine nello store (thumbs/, nome = hash
  *    dell'URL immagine) con tetto dimensionale e verifica del content-type.
  *
- * fetchImpl è iniettabile per i test. Ogni errore di rete è recuperabile:
- * fetch ritorna null e l'item resta con il titolo di fallback.
+ * fetchImpl e videoSource sono iniettabili per i test. Ogni errore di rete è
+ * recuperabile: fetch ritorna null e l'item resta con il titolo di fallback.
  */
 
 export interface PageMetadata {
@@ -28,6 +30,8 @@ export interface PageMetadata {
   /** Canale/autore (oEmbed di YouTube/Vimeo): nome + URL canonico. */
   authorName?: string;
   authorUrl?: string;
+  /** Tag dichiarati dall'autore del contenuto (yt-dlp), ripuliti. */
+  keywords?: string[];
 }
 
 const USER_AGENT = "Mozilla/5.0 (compatible; StashArchiver/1.0; +local-personal-tool)";
@@ -43,6 +47,7 @@ export class MetadataFetcher {
   constructor(
     private readonly fileStore: FileStore,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly videoSource?: VideoMetadataSource,
   ) {}
 
   async fetch(canonicalUrl: string): Promise<PageMetadata | null> {
@@ -95,6 +100,16 @@ export class MetadataFetcher {
   private async fetchYouTubeOEmbed(url: URL): Promise<PageMetadata | null> {
     const videoId = youtubeVideoId(url);
     const canonical = videoId ? `https://youtu.be/${videoId}` : url.toString();
+    // Strategia primaria: yt-dlp porta descrizione integrale e tag dell'autore.
+    // Null o errore = sorgente indisponibile → si prosegue online.
+    if (this.videoSource && videoId) {
+      try {
+        const viaSource = await this.videoSource.fetch(canonical);
+        if (viaSource) return viaSource;
+      } catch {
+        // La sorgente video è best-effort: mai bloccare l'arricchimento.
+      }
+    }
     // L'oEmbed di YouTube non include la descrizione: la si recupera in
     // parallelo dall'og:description della pagina watch (fallisce in silenzio).
     const [metadata, description] = await Promise.all([

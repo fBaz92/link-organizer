@@ -170,6 +170,48 @@ describe("IngestionService", () => {
   });
 });
 
+describe("IngestionService con sorgente video (yt-dlp)", () => {
+  let handle: DatabaseHandle;
+  let items: ItemsRepository;
+  let ingestion: Service;
+
+  beforeAll(async () => {
+    handle = openDatabase(":memory:");
+    migrate(handle.raw);
+    items = new ItemsRepository(handle);
+    const files = new FileStore(await mkdtemp(path.join(tmpdir(), "stash-ing2-")));
+    // Sorgente video finta: metadati completi con i tag dell'autore.
+    const videoSource = {
+      fetch: async () => ({
+        title: "Grid-forming converters explained",
+        description: "Tutto sui convertitori grid-forming e sulle microgrid",
+        authorName: "Power Systems",
+        keywords: ["grid-forming", "Microgrid", "video"],
+      }),
+    };
+    const offline = (async () => new Response("offline", { status: 404 })) as typeof fetch;
+    ingestion = new IngestionService(items, files, new MetadataFetcher(files, offline, videoSource));
+  });
+
+  afterAll(() => handle.raw.close());
+
+  it("l'arricchimento aggiunge i tag dell'autore ai tag automatici, senza duplicati né rimozioni", async () => {
+    const created = await ingestion.ingest({
+      payload: { kind: "url", url: "https://www.youtube.com/watch?v=abcdefghijk" },
+      source: "telegram",
+    });
+    if (created.status !== "created") throw new Error("atteso created");
+    items.replaceTags(created.item.id, ["da-vedere", "grid-forming"]);
+
+    const enriched = await ingestion.enrichMetadata(created.item);
+    expect(enriched.title).toBe("Grid-forming converters explained");
+    expect(enriched.description).toBe("Tutto sui convertitori grid-forming e sulle microgrid");
+    expect(enriched.tags).toEqual(expect.arrayContaining(["da-vedere", "grid-forming", "microgrid"]));
+    // "grid-forming" era già presente (a mano): niente duplicato.
+    expect(enriched.tags.filter((t) => t === "grid-forming")).toHaveLength(1);
+  });
+});
+
 describe("ItemsRepository", () => {
   let handle: DatabaseHandle;
   let items: ItemsRepository;

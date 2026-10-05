@@ -41,6 +41,31 @@ export function ytDlpPath(): string {
   return process.env.YTDLP_PATH?.trim() || "yt-dlp";
 }
 
+// ── Tag semantici (modello locale di embedding) ──────────────────────────
+
+/** False solo con SEMANTIC_TAGS=0|off|false|no: per default è attivo. */
+export function semanticTagsEnabled(): boolean {
+  const value = (process.env.SEMANTIC_TAGS ?? "").trim().toLowerCase();
+  return !["0", "off", "false", "no"].includes(value);
+}
+
+/** Override del modello di embedding (default dentro semantic-tags.ts). */
+export function semanticTagsModel(): string | undefined {
+  return process.env.SEMANTIC_TAGS_MODEL?.trim() || undefined;
+}
+
+/** Similarità coseno minima per suggerire un tag (default dentro il modulo). */
+export function semanticTagsThreshold(): number | undefined {
+  const value = Number.parseFloat((process.env.SEMANTIC_TAGS_THRESHOLD ?? "").trim());
+  return Number.isFinite(value) && value > 0 && value < 1 ? value : undefined;
+}
+
+/** Massimo tag semantici per item (default dentro il modulo). */
+export function semanticTagsTopK(): number | undefined {
+  const value = Number.parseInt((process.env.SEMANTIC_TAGS_TOP_K ?? "").trim(), 10);
+  return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
 /**
  * Chat Telegram che riceve i video scaricati dalla web UI. Default: il
  * primo user ID autorizzato (il proprietario, in un tool personale).

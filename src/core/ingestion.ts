@@ -97,19 +97,23 @@ export class IngestionService {
     });
 
     const updated = this.items.getById(item.id) ?? item;
-    this.applyKeywordTags(updated);
+    this.applyAutoTags(updated, metadata.keywords);
     return this.items.getById(item.id) ?? updated;
   }
 
   /**
-   * Unisce i tag dedotti dal testo noto (titolo + descrizione) a quelli
-   * esistenti: solo aggiunte, mai rimosse — ciò che è stato messo a mano
-   * resta. Chiamata dopo l'arricchimento, quando il testo è nuovo.
+   * Unisce i tag dedotti dal testo noto (titolo + descrizione) e quelli
+   * dichiarati dall'autore (keywords di yt-dlp) a quelli esistenti: solo
+   * aggiunte, mai rimosse — ciò che è stato messo a mano resta. Chiamata
+   * dopo l'arricchimento, quando il testo è nuovo.
    */
-  private applyKeywordTags(item: Item): void {
+  private applyAutoTags(item: Item, authorKeywords: string[] = []): void {
     const text = [item.title, item.description].filter(Boolean).join(" ").trim();
-    if (!text) return;
-    const missing = keywordTags(text).filter((tag) => !item.tags.includes(tag));
+    const candidates = [
+      ...keywordTags(text),
+      ...authorKeywords.map((tag) => tag.trim().toLowerCase()).filter(Boolean),
+    ];
+    const missing = [...new Set(candidates)].filter((tag) => !item.tags.includes(tag));
     if (missing.length === 0) return;
     logger.info(`Auto-tag item #${item.id}: +${missing.join(", +")}`);
     this.items.replaceTags(item.id, [...item.tags, ...missing]);
@@ -192,4 +196,14 @@ function fallbackTitle(canonicalUrl: string): string {
   } catch {
     return canonicalUrl;
   }
+}
+
+/**
+ * True se il titolo dell'item è quello di fallback (hostname o assente):
+ * non è contenuto umano, e chi arricchisce/classifica non deve trattarlo
+ * come testo significativo (es. niente tag semantici sopra un hostname).
+ */
+export function isFallbackTitle(item: Pick<Item, "title" | "canonicalUrl" | "url">): boolean {
+  if (!item.title) return true;
+  return item.title === fallbackTitle(item.canonicalUrl ?? item.url ?? "");
 }

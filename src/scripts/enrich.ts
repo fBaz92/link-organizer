@@ -2,6 +2,7 @@
 import path from "node:path";
 import { loadDotEnv } from "@/config/dotenv";
 import type { Item } from "@/core/domain/item";
+import { isFallbackTitle } from "@/core/ingestion";
 import { logger } from "@/core/logger";
 import { createRuntime } from "@/core/runtime";
 
@@ -39,19 +40,9 @@ function intFlag(name: string, fallback: number): number {
   return fallback;
 }
 
-/** Titolo di fallback = hostname: significa "i metadati non sono mai arrivati". */
-function hasFallbackTitle(item: Item): boolean {
-  if (!item.title) return true;
-  try {
-    return item.title === new URL(item.canonicalUrl ?? item.url ?? "").hostname.replace(/^www\./, "");
-  } catch {
-    return false;
-  }
-}
-
 function needsEnrichment(item: Item): boolean {
   if (!item.url) return false; // i documenti non hanno metadati di rete
-  return hasFallbackTitle(item) || !item.description || !item.authorName;
+  return isFallbackTitle(item) || !item.description || !item.authorName;
 }
 
 async function main(): Promise<void> {
