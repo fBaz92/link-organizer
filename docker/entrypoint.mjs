@@ -111,5 +111,16 @@ logEvent("info", "container_starting", "Avvio del container Stash", {
   uid: process.getuid?.(),
 });
 
-startProcess("web", process.execPath, ["server.js"], { cwd: "/app/web" }, true);
+// La webapp Next è il processo primario: la readiness HTTP (/health) è la
+// sua. Il bot parte dopo, con il proprio ciclo di vita e log strutturati.
+// Nota HOSTNAME: Docker lo inietta con l'id del container e il server
+// standalone di Next lo userebbe come indirizzo di bind: il contratto
+// richiede 0.0.0.0, quindi si forza esplicitamente.
+startProcess(
+  "web",
+  process.execPath,
+  ["server.js"],
+  { cwd: "/app/web", env: { ...process.env, HOSTNAME: "0.0.0.0" } },
+  true,
+);
 startProcess("bot", process.execPath, ["/app/service/main.js"], { cwd: "/app" }, false);

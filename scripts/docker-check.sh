@@ -38,6 +38,9 @@ docker run --rm --entrypoint sh "${IMAGE}" -c 'yt-dlp --version >/dev/null && ff
 
 echo "▶ Avvio con vincoli HomeGate (read-only, tmpfs, UID 65534)"
 DATA_DIR="$(mktemp -d "${TMPDIR:-/tmp}/stash-docker-data.XXXXXX")"
+# HomeGate prepara /data scrivibile per l'UID assegnato: nel test si replica
+# aprendo la cartella (mktemp nasce 0700 dell'utente che lo crea).
+chmod 0777 "${DATA_DIR}"
 # Password di prova generata a caso: nessuna credenziale nel sorgente.
 CHECK_PASSWORD="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 CID="$(docker run -d \
