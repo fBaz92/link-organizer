@@ -74,7 +74,7 @@ jobs:
           esac
 
       - name: Prova locale dell'immagine (architettura del runner)
-        run: bash scripts/docker-check.sh "v${{ inputs.version }}"
+        run: bash scripts/docker-check.sh "${IMAGE}:v${{ inputs.version }}"
 
       - name: Pin del digest nel manifest e release
         run: |
