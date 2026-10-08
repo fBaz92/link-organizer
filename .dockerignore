@@ -1,0 +1,15 @@
+# Contesto di build: solo ciò che serve all'immagine.
+.git
+.github
+.next
+node_modules
+data
+dist
+tests
+*.md
+.env
+.env.*
+!.env.example
+.mimosa
+coverage
+tsconfig.tsbuildinfo

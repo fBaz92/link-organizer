@@ -1,0 +1,89 @@
+name: docker-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versione X.Y.Z da rilasciare (già presente in VERSION)"
+        required: true
+        type: string
+
+env:
+  IMAGE: ghcr.io/fbaz92/link-organizer
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm build:service
+      - run: bash scripts/package-check.sh
+
+      - name: VERSION coerente con la richiesta
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          [ "${VERSION}" = "${{ inputs.version }}" ] || {
+            echo "VERSION (${VERSION}) != ${{ inputs.version }}" >&2; exit 1;
+          }
+
+  release:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Login su GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Buildx multi-arch e push
+        run: |
+          docker buildx create --use
+          docker buildx build \
+            --platform linux/arm64,linux/amd64 \
+            --tag "${IMAGE}:v${{ inputs.version }}" \
+            --tag "${IMAGE}:stable" \
+            --push \
+            .
+
+      - name: Digest dell'indice multiarch
+        id: digest
+        run: |
+          DIGEST="$(docker buildx imagetools inspect "${IMAGE}:v${{ inputs.version }}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          case "${DIGEST}" in
+            sha256:[0-9a-f]*) echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT" ;;
+            *) echo "digest inatteso: ${DIGEST}" >&2; exit 1 ;;
+          esac
+
+      - name: Prova locale dell'immagine (architettura del runner)
+        run: bash scripts/docker-check.sh "v${{ inputs.version }}"
+
+      - name: Pin del digest nel manifest e release
+        run: |
+          bash scripts/set-image-digest.sh "${{ steps.digest.outputs.digest }}"
+          git config user.name "homegate-release-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add service.toml
+          git commit -m "release: v${{ inputs.version }} image ${{ steps.digest.outputs.digest }}"
+          SHA="$(git rev-parse HEAD)"
+          git push origin main
+          git tag "v${{ inputs.version }}" "${SHA}"
+          git push origin "v${{ inputs.version }}"
+          # stable punta allo stesso commit del tag: canale HomeGate.
+          git push origin "${SHA}:refs/heads/stable"

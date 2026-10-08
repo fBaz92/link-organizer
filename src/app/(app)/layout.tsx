@@ -4,6 +4,7 @@ import { requireAuth, authEnabled } from "@/lib/auth";
 import { logoutAction } from "@/app/actions";
 import { AddDialog } from "@/components/add-dialog";
 import { BottomNav, SidebarNav } from "@/components/app-nav";
+import { KeepAlive } from "@/components/keepalive";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="min-h-dvh">
+      <KeepAlive />
       <aside className="fixed inset-y-0 left-0 z-20 hidden w-60 flex-col border-r bg-card px-4 py-5 md:flex">
         <Link href="/" className="mb-6 flex items-center gap-2 px-2 text-lg font-extrabold tracking-tight">
           <Archive className="size-5 text-primary" />

@@ -1,0 +1,37 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13
+          cache: pnpm
+
+      - name: Installa dipendenze
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Bundle del bot (usato anche nel container)
+        run: pnpm build:service
+
+      - name: Prova del pacchetto bot estratto
+        run: bash scripts/package-check.sh
+
+      - name: Build della webapp (standalone, come nell'immagine)
+        run: pnpm build

@@ -1,14 +1,36 @@
 schema = 1
 id = "link-organizer"
-description = "Archivio personale di link, video, articoli e documenti: un bot Telegram li raccoglie e organizza al volo, e dal Raspberry si rileggono e cercano tramite la pagina web inclusa, nella rete di casa."
+description = "Archivio personale di link, video, articoli e documenti: un bot Telegram li raccoglie e organizza al volo, e la webapp completa girata sul Raspberry permette di cercarli, annotarli e scaricare i video dalla rete di casa."
 
 [release]
 repository = "fBaz92/link-organizer"
-runtime = "node"
-entrypoint = "dist/main.js"
-runtime_min = "22.13.0"
+runtime = "docker"
+entrypoint = "service.toml"
 architectures = ["arm64", "amd64"]
 os = "linux"
+
+[container]
+# Digest immutabile dell'indice multiarch: aggiornato dal workflow di
+# release (docker-release.yml) dopo il push su GHCR. Nessun tag mobile.
+image = "ghcr.io/fbaz92/link-organizer@sha256:PENDING"
+port = 3000
+proxy_port = 8790
+health_path = "/health"
+startup_timeout = 90
+memory_mb = 768
+cpus = 1.0
+
+[[environment]]
+key = "HOMEGATE_IDLE_MINUTES"
+label = "Riposo dopo inattività"
+description = "Minuti senza richieste prima di fermare il container: durante il riposo anche il bot Telegram è fermo; una scheda della webapp aperta lo tiene svegliato"
+type = "integer"
+secret = false
+required = true
+parameter = true
+min = 1
+max = 1440
+default = "1440"
 
 [[environment]]
 key = "BOT_TOKEN"
@@ -29,28 +51,16 @@ parameter = true
 
 [[environment]]
 key = "WEB_PASSWORD"
-label = "Password della pagina web"
-description = "Password di accesso al visualizzatore web incluso; lasciarla vuota non è ammesso in LAN"
+label = "Password della webapp"
+description = "Password di accesso alla web UI completa"
 type = "string"
 secret = true
 required = true
 
 [[environment]]
-key = "PORT"
-label = "Porta HTTP"
-description = "Porta su cui il visualizzatore web ascolta nella LAN"
-type = "integer"
-secret = false
-required = true
-parameter = true
-min = 1024
-max = 65535
-default = "8787"
-
-[[environment]]
 key = "WEB_APP_URL"
-label = "URL pubblico della pagina web"
-description = "Indirizzo con cui raggiungere il visualizzatore dal browser (usato dal bot per i deep link); se vuoto viene stimato dall'indirizzo LAN del Raspberry"
+label = "URL pubblico della webapp"
+description = "Indirizzo con cui raggiungere il servizio dal browser, usato dal bot per i deep link (es. http://IP-DEL-GATEWAY:8790); se vuoto si stima dalla rete"
 type = "string"
 secret = false
 required = false
@@ -68,7 +78,7 @@ parameter = true
 [[environment]]
 key = "YTDLP_PATH"
 label = "Percorso di yt-dlp"
-description = "Eseguibile yt-dlp già installato sul dispositivo (serve anche ffmpeg per la qualità 720p); default: yt-dlp cercato nel PATH"
+description = "L'immagine include yt-dlp e ffmpeg: serve solo per puntare a un binario diverso"
 type = "string"
 secret = false
 required = false

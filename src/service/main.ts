@@ -9,6 +9,7 @@ import {
   guessWebAppUrl,
   httpPort,
   telegramToken,
+  viewerEnabled,
   webPassword,
 } from "@/config/env";
 import { migrate } from "@/db/migrate";
@@ -20,20 +21,19 @@ import { logEvent } from "@/service/log";
 import { startWebUi, type WebUiHandle } from "@/service/web-ui";
 
 /*
- * Flow: entrypoint unico del servizio HomeGate (dist/main.js). Nessuna
- * dipendenza nativa e nessun node_modules: tutto il necessario è nel bundle
- * (SQLite arriva da node:sqlite, integrato in Node ≥ 22.13).
+ * Flow: entrypoint del processo "bot" del servizio. Due modalità:
  *
- * 1. carica il .env dalla configurazione gestita (HOMEGATE_CONFIG_DIR) o cwd;
- * 2. apre/migra il database nella cartella dati (HOMEGATE_STATE_DIR);
- * 3. avvia il visualizzatore web sulla PORT configurata;
- * 4. avvia il bot Telegram se token e allowlist ci sono (altrimenti resta
- *    solo la web, con un avviso nei log);
- * 5. arresto ordinato su SIGTERM/SIGTERM: chiude bot e web, checkpoint del
- *    WAL e chiusura del database, exit 0 (exit 1 di sicurezza dopo 20 s).
+ * - completa (default, runtime node di HomeGate o sviluppo): visualizzatore
+ *   web leggero su PORT + bot Telegram;
+ * - solo-bot (STASH_VIEWER=0, usata dal container Docker dove la web UI è
+ *   la webapp Next completa in un processo separato): nessuna porta.
+ *
+ * Arresto ordinato su SIGINT/SIGTERM entro i 10 secondi richiesti dal
+ * contratto Docker (bot → web → checkpoint WAL → chiusura DB → exit 0,
+ * con uscita forzata di sicurezza a 7 s).
  */
 
-const FORCE_EXIT_MS = 20_000;
+const FORCE_EXIT_MS = 7_000;
 
 async function serviceVersion(): Promise<string> {
   // Nel bundle il riferimento è dist/main.js → ../VERSION (radice release);
@@ -61,12 +61,15 @@ async function main(): Promise<void> {
   loadDotEnv(path.join(process.cwd(), ".env"));
 
   const version = await serviceVersion();
-  let port: number;
-  try {
-    port = httpPort();
-  } catch (error) {
-    logEvent("error", "config_invalid", "Configurazione non valida, arresto", { error });
-    process.exit(1);
+  const withViewer = viewerEnabled();
+  let port: number | undefined;
+  if (withViewer) {
+    try {
+      port = httpPort();
+    } catch (error) {
+      logEvent("error", "config_invalid", "Configurazione non valida, arresto", { error });
+      process.exit(1);
+    }
   }
 
   const stateDir = dataDir();
@@ -76,7 +79,8 @@ async function main(): Promise<void> {
     pid: process.pid,
     dataDir: stateDir,
     configDir: configDir(),
-    port,
+    viewer: withViewer,
+    ...(port !== undefined ? { port } : {}),
   });
 
   const handle = openNodeSqliteDatabase();
@@ -86,22 +90,43 @@ async function main(): Promise<void> {
 
   const runtime: StashRuntime = createRuntime(stateDir, handle);
 
-  const web = await startWebUi(runtime, {
-    port,
-    password: webPassword(),
-    dataRoot: stateDir,
-  });
-  const webAppUrl = guessWebAppUrl(web.port);
-  logEvent("info", "web_listening", "Visualizzatore web in ascolto", {
-    port: web.port,
-    bind: "0.0.0.0",
-    url: webAppUrl,
-    auth: webPassword() !== undefined,
-  });
+  let web: WebUiHandle | undefined;
+  let webAppUrl: string;
+  if (withViewer) {
+    web = await startWebUi(runtime, {
+      port: port!,
+      password: webPassword(),
+      dataRoot: stateDir,
+    });
+    webAppUrl = guessWebAppUrl(web.port);
+    logEvent("info", "web_listening", "Visualizzatore web in ascolto", {
+      port: web.port,
+      bind: "0.0.0.0",
+      url: webAppUrl,
+      auth: webPassword() !== undefined,
+    });
+  } else {
+    // Modalità solo-bot (container): la web UI è la webapp Next esterna.
+    // L'URL per i deep link si stima dalla porta della webapp se nota.
+    webAppUrl = guessWebAppUrl(Number.parseInt((process.env.WEB_APP_PORT ?? "3000"), 10) || 3000);
+    logEvent("info", "viewer_disabled", "Visualizzatore interno disattivato: la web UI è la webapp Next");
+  }
 
   const token = telegramToken();
   const allowed = allowedUserIds();
   if (!token || allowed.length === 0) {
+    if (!withViewer) {
+      // Senza web di risparmio, un servizio solo-bot senza credenziali non
+      // fa nulla: meglio fallire subito e rumorosamente.
+      logEvent(
+        "error",
+        "bot_config_missing",
+        "Modalità solo-bot senza BOT_TOKEN e TELEGRAM_ALLOWED_USER_IDS: configurazione incompleta, arresto",
+        { has_token: Boolean(token), allowed_count: allowed.length },
+      );
+      handle.raw.close();
+      process.exit(1);
+    }
     logEvent(
       "warn",
       "bot_disabled",
@@ -145,7 +170,7 @@ async function main(): Promise<void> {
   installShutdown(runtime, web, bot);
 }
 
-function installShutdown(runtime: StashRuntime, web: WebUiHandle, bot: Bot | undefined): void {
+function installShutdown(runtime: StashRuntime, web: WebUiHandle | undefined, bot: Bot | undefined): void {
   let stopping = false;
   const stop = (signal: string) => {
     if (stopping) return;
@@ -159,7 +184,8 @@ function installShutdown(runtime: StashRuntime, web: WebUiHandle, bot: Bot | und
     force.unref();
 
     const botStopped = bot ? bot.stop() : Promise.resolve();
-    void Promise.allSettled([botStopped, web.close()])
+    const webClosed = web ? web.close() : Promise.resolve();
+    void Promise.allSettled([botStopped, webClosed])
       .then(async () => {
         try {
           // Checkpoint del WAL: file principale coerente anche per un backup a

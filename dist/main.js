@@ -14494,6 +14494,10 @@ function configDir() {
   return process.env.HOMEGATE_CONFIG_DIR?.trim() || process.cwd();
 }
 var DEFAULT_SERVICE_PORT = 8787;
+function viewerEnabled() {
+  const value = (process.env.STASH_VIEWER ?? "").trim().toLowerCase();
+  return !["0", "off", "false", "no"].includes(value);
+}
 function httpPort() {
   const raw = (process.env.PORT ?? "").trim();
   if (raw === "") return DEFAULT_SERVICE_PORT;
@@ -22830,7 +22834,7 @@ ${body}
 }
 
 // src/service/main.ts
-var FORCE_EXIT_MS = 2e4;
+var FORCE_EXIT_MS = 7e3;
 async function serviceVersion() {
   const candidates = [
     fileURLToPath(new URL("../VERSION", import.meta.url)),
@@ -22851,12 +22855,15 @@ async function main() {
   loadDotEnv(path8.join(configDir(), ".env"));
   loadDotEnv(path8.join(process.cwd(), ".env"));
   const version2 = await serviceVersion();
+  const withViewer = viewerEnabled();
   let port;
-  try {
-    port = httpPort();
-  } catch (error) {
-    logEvent("error", "config_invalid", "Configurazione non valida, arresto", { error });
-    process.exit(1);
+  if (withViewer) {
+    try {
+      port = httpPort();
+    } catch (error) {
+      logEvent("error", "config_invalid", "Configurazione non valida, arresto", { error });
+      process.exit(1);
+    }
   }
   const stateDir = dataDir();
   logEvent("info", "service_starting", "Avvio del servizio Stash", {
@@ -22865,28 +22872,46 @@ async function main() {
     pid: process.pid,
     dataDir: stateDir,
     configDir: configDir(),
-    port
+    viewer: withViewer,
+    ...port !== void 0 ? { port } : {}
   });
   const handle = openNodeSqliteDatabase();
   migrate(handle.raw);
   const userVersion = handle.raw.pragma("user_version", { simple: true });
   logEvent("info", "db_ready", "Database pronto", { file: "stash.db", user_version: userVersion });
   const runtime = createRuntime(stateDir, handle);
-  const web = await startWebUi(runtime, {
-    port,
-    password: webPassword(),
-    dataRoot: stateDir
-  });
-  const webAppUrl = guessWebAppUrl(web.port);
-  logEvent("info", "web_listening", "Visualizzatore web in ascolto", {
-    port: web.port,
-    bind: "0.0.0.0",
-    url: webAppUrl,
-    auth: webPassword() !== void 0
-  });
+  let web;
+  let webAppUrl;
+  if (withViewer) {
+    web = await startWebUi(runtime, {
+      port,
+      password: webPassword(),
+      dataRoot: stateDir
+    });
+    webAppUrl = guessWebAppUrl(web.port);
+    logEvent("info", "web_listening", "Visualizzatore web in ascolto", {
+      port: web.port,
+      bind: "0.0.0.0",
+      url: webAppUrl,
+      auth: webPassword() !== void 0
+    });
+  } else {
+    webAppUrl = guessWebAppUrl(Number.parseInt(process.env.WEB_APP_PORT ?? "3000", 10) || 3e3);
+    logEvent("info", "viewer_disabled", "Visualizzatore interno disattivato: la web UI \xE8 la webapp Next");
+  }
   const token = telegramToken();
   const allowed = allowedUserIds();
   if (!token || allowed.length === 0) {
+    if (!withViewer) {
+      logEvent(
+        "error",
+        "bot_config_missing",
+        "Modalit\xE0 solo-bot senza BOT_TOKEN e TELEGRAM_ALLOWED_USER_IDS: configurazione incompleta, arresto",
+        { has_token: Boolean(token), allowed_count: allowed.length }
+      );
+      handle.raw.close();
+      process.exit(1);
+    }
     logEvent(
       "warn",
       "bot_disabled",
@@ -22934,7 +22959,8 @@ function installShutdown(runtime, web, bot) {
     }, FORCE_EXIT_MS);
     force.unref();
     const botStopped = bot ? bot.stop() : Promise.resolve();
-    void Promise.allSettled([botStopped, web.close()]).then(async () => {
+    const webClosed = web ? web.close() : Promise.resolve();
+    void Promise.allSettled([botStopped, webClosed]).then(async () => {
       try {
         runtime.db.raw.pragma("wal_checkpoint(TRUNCATE)");
       } catch {

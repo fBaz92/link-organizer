@@ -32,6 +32,16 @@ export function configDir(): string {
 /** Porta HTTP del visualizzatore incluso nel servizio. */
 export const DEFAULT_SERVICE_PORT = 8787;
 
+/**
+ * Visualizzatore incluso nel servizio: attivo di default, disattivato con
+ * STASH_VIEWER=0/off/false (nel container Docker la web UI è la webapp Next
+ * completa e il processo gira in modalità solo-bot).
+ */
+export function viewerEnabled(): boolean {
+  const value = (process.env.STASH_VIEWER ?? "").trim().toLowerCase();
+  return !["0", "off", "false", "no"].includes(value);
+}
+
 /** PORT valida: intero 1024-65535, altrimenti il default del servizio. */
 export function httpPort(): number {
   const raw = (process.env.PORT ?? "").trim();
