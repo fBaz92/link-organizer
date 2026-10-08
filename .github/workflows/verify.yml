@@ -15,7 +15,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.13
+          # node:sqlite con FTS5 richiede la 22.x recente (SQLite 3.53.x,
+          # da ~22.23): si usa l'ultima della linea, come nell'immagine.
+          node-version: 22
           cache: pnpm
 
       - name: Installa dipendenze

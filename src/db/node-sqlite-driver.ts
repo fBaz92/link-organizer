@@ -16,7 +16,8 @@ import type {
 
 /*
  * Flow: driver SQLite per il servizio HomeGate, basato sul modulo integrato
- * node:sqlite (Node ≥ 22.13) invece di better-sqlite3: così il bundle di
+ * node:sqlite (Node ≥ 22.23 per FTS5 nel bundled SQLite) invece di
+ * better-sqlite3: così il bundle di
  * produzione non contiene moduli nativi e gira senza installazioni su
  * Raspberry (arm64/amd64). L'interfaccia è la stessa di connection.ts
  * (SqliteClient): migratore, repository e drizzle funzionano identici e il
