@@ -12,7 +12,7 @@ os = "linux"
 [container]
 # Digest immutabile dell'indice multiarch: aggiornato dal workflow di
 # release (docker-release.yml) dopo il push su GHCR. Nessun tag mobile.
-image = "ghcr.io/fbaz92/link-organizer@sha256:PENDING"
+image = "ghcr.io/fbaz92/link-organizer@sha256:ab203a4708d274eacf0fa46bd26d9f8d62604919f09c636ebec3ac44baecba4d"
 port = 3000
 proxy_port = 8790
 health_path = "/health"
