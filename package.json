@@ -17,6 +17,7 @@
     "import:telegram": "tsx src/scripts/import-telegram.ts",
     "enrich": "tsx src/scripts/enrich.ts",
     "auto-tag": "tsx src/scripts/auto-tag.ts",
+    "thumbs": "tsx src/scripts/thumbs.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:package": "bash scripts/package-check.sh",

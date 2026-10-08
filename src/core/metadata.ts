@@ -229,9 +229,14 @@ export function oembedToMetadata(data: Record<string, unknown>): PageMetadata {
 function extractMeta(html: string, names: string[]): string | null {
   for (const name of names) {
     const escaped = name.replace(/[:."]/g, "\\$&");
+    // Il valore viene catturato fino all'apice CHIUSORE, non a "un apice
+    // qualunque": i titoli italiani contengono apostrofi anche dentro
+    // attributi delimitati da doppi apici.
     const patterns = [
-      new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"),
-      new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["']`, "i"),
+      new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content="([^"]*)"`, "i"),
+      new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content='([^']*)'`, "i"),
+      new RegExp(`<meta[^>]+content="([^"]*)"[^>]+(?:property|name)=["']${escaped}["']`, "i"),
+      new RegExp(`<meta[^>]+content='([^']*)'[^>]+(?:property|name)=["']${escaped}["']`, "i"),
     ];
     for (const pattern of patterns) {
       const match = html.match(pattern);

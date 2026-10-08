@@ -17,6 +17,8 @@ Il repository è un **servizio [HomeGate](https://github.com/fBaz92/homegate)** 
 
 Raccoglie link e documenti che invii al bot Telegram, li classifica con tag automatici, li arricchisce con i metadati (YouTube via yt-dlp) e li archivia deduplicati in SQLite con ricerca full-text. Dal browser di casa cerchi, annoti e scarichi l'archivio; da Telegram cerchi, estrai a sorte e ricevi i video scaricati.
 
+**Thumbnail sempre al passo**: all'avvio e poi ogni 6 ore il servizio cerca gli item rimasti senza thumbnail (import vecchi, arricchimenti falliti) e le scarica — per YouTube direttamente dall'URL pubblico, per gli altri siti dai metadati della pagina. In locale la stessa cosa: `pnpm thumbs`.
+
 ## Installazione con HomeGate (profilo Docker)
 
 Prerequisiti sul gateway (Raspberry):
@@ -95,7 +97,7 @@ pnpm dev               # webapp Next (3002) + servizio bot+visualizzatore (8787)
 
 La webapp gira con better-sqlite3; il processo bot usa node:sqlite: stesso database in WAL, zero conflitti. Immagine Docker locale: `docker build -t stash .` e prova con `bash scripts/docker-check.sh`.
 
-Script CLI (solo sviluppo): `pnpm import:telegram`, `pnpm enrich`, `pnpm auto-tag` (tag semantici con modello locale), `pnpm seed:demo`.
+Script CLI (solo sviluppo): `pnpm import:telegram`, `pnpm enrich`, `pnpm thumbs` (backfill thumbnail), `pnpm auto-tag` (tag semantici con modello locale), `pnpm seed:demo`.
 
 ### Comandi del bot
 
@@ -111,7 +113,7 @@ Script CLI (solo sviluppo): `pnpm import:telegram`, `pnpm enrich`, `pnpm auto-ta
 ## Test
 
 ```bash
-pnpm test            # 144 test: dominio, bot, DB (due driver SQLite), contratto Docker
+pnpm test            # suite: dominio, bot, DB (due driver SQLite), backfill, contratto Docker
 pnpm test:package    # bundle bot estratto: avvio, HTTP, SIGTERM→exit 0
 bash scripts/docker-check.sh   # container: build, /health, auth, RO fs, UID non root, SIGTERM
 pnpm typecheck && pnpm build   # webapp standalone

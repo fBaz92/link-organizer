@@ -20298,6 +20298,17 @@ var ItemsRepository = class {
       byType: Object.fromEntries(byType.map((row) => [row.type, row.total]))
     };
   }
+  /**
+   * Item senza thumbnail locale ma con un URL da cui recuperarla: la coda
+   * del backfill automatico (i più recenti prima). Senza URL non c'è
+   * nulla da scaricare e non compaiono.
+   */
+  listMissingThumbnails(limit) {
+    const rows = this.db.select().from(items).where(and(isNull(items.thumbnailPath), isNotNull(items.url))).orderBy(desc(items.id)).limit(limit).all();
+    const result = rows.map((row) => this.toDomain(row, []));
+    this.attachTags(result);
+    return result;
+  }
   /** Canali noti con conteggio, per il filtro dell'archivio. */
   authorsWithCounts() {
     const rows = this.db.select({
@@ -21266,8 +21277,10 @@ function extractMeta(html, names) {
   for (const name of names) {
     const escaped = name.replace(/[:."]/g, "\\$&");
     const patterns = [
-      new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"),
-      new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["']`, "i")
+      new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content="([^"]*)"`, "i"),
+      new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content='([^']*)'`, "i"),
+      new RegExp(`<meta[^>]+content="([^"]*)"[^>]+(?:property|name)=["']${escaped}["']`, "i"),
+      new RegExp(`<meta[^>]+content='([^']*)'[^>]+(?:property|name)=["']${escaped}["']`, "i")
     ];
     for (const pattern of patterns) {
       const match = html.match(pattern);
@@ -21846,6 +21859,65 @@ function createRuntime(rootDir, db, videoDownload) {
     botToken: telegramToken()
   });
   return { db, items: items2, files, metadata, ingestion, videoDownload: downloads };
+}
+
+// src/core/thumbnail-backfill.ts
+function youtubeThumbnailUrl(canonicalUrl) {
+  try {
+    const videoId = youtubeVideoId(new URL(canonicalUrl));
+    return videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function backfillThumbnails(runtime, options = {}) {
+  const limit = options.limit ?? 500;
+  const pauseMs = options.pauseMs ?? 300;
+  const targets = runtime.items.listMissingThumbnails(limit);
+  const summary = { scanned: targets.length, fetched: 0, failed: 0 };
+  for (const item of targets) {
+    let result;
+    const direct = item.canonicalUrl ? youtubeThumbnailUrl(item.canonicalUrl) : void 0;
+    if (direct && item.type !== "documento") {
+      result = await backfillYoutube(runtime, item.id, direct);
+    } else if (item.url) {
+      result = await backfillViaMetadata(runtime, item);
+    } else {
+      result = { itemId: item.id, ok: false, via: "metadata", error: "nessun URL da cui recuperare" };
+    }
+    if (result.ok) summary.fetched += 1;
+    else summary.failed += 1;
+    options.onItem?.(result);
+    if (pauseMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, pauseMs));
+    }
+  }
+  return summary;
+}
+async function backfillYoutube(runtime, itemId, thumbnailUrl) {
+  const path9 = await runtime.metadata.downloadThumbnail(thumbnailUrl);
+  if (!path9) {
+    return { itemId, ok: false, via: "youtube-direct", error: "download della thumbnail non riuscito" };
+  }
+  runtime.items.update(itemId, { thumbnailPath: path9 });
+  return { itemId, ok: true, via: "youtube-direct" };
+}
+async function backfillViaMetadata(runtime, item) {
+  const target = runtime.items.getById(item.id);
+  if (!target) {
+    return { itemId: item.id, ok: false, via: "metadata", error: "item non trovato" };
+  }
+  try {
+    const enriched = await runtime.ingestion.enrichMetadata(target);
+    return {
+      itemId: item.id,
+      ok: Boolean(enriched.thumbnailPath),
+      via: "metadata",
+      ...enriched.thumbnailPath ? {} : { error: "metadati senza thumbnail utilizzabile" }
+    };
+  } catch (error) {
+    return { itemId: item.id, ok: false, via: "metadata", error: String(error) };
+  }
 }
 
 // src/bot/stash-bot.ts
@@ -22946,6 +23018,40 @@ async function main() {
     upload_chat_configured: process.env.TELEGRAM_UPLOAD_CHAT_ID !== void 0
   });
   installShutdown(runtime, web, bot);
+  startThumbnailBackfill(runtime);
+}
+function startThumbnailBackfill(runtime) {
+  const INTERVAL_MS = 6 * 60 * 60 * 1e3;
+  const run = (trigger) => {
+    void backfillThumbnails(runtime, {
+      onItem: (result) => {
+        if (!result.ok) {
+          logEvent("warn", "thumb_backfill_item_failed", "Thumbnail non recuperabile per un item", {
+            item_id: result.itemId,
+            via: result.via,
+            error: result.error
+          });
+        }
+      }
+    }).then((summary) => {
+      if (summary.scanned > 0) {
+        logEvent("info", "thumb_backfill_done", "Backfill delle thumbnail completato", {
+          trigger,
+          scanned: summary.scanned,
+          fetched: summary.fetched,
+          failed: summary.failed
+        });
+      }
+    }).catch((error) => {
+      logEvent("error", "thumb_backfill_failed", "Backfill delle thumbnail interrotto da un errore", {
+        trigger,
+        error
+      });
+    });
+  };
+  run("startup");
+  const timer = setInterval(() => run("periodic"), INTERVAL_MS);
+  timer.unref();
 }
 function installShutdown(runtime, web, bot) {
   let stopping = false;

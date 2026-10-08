@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNotNull, like, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNotNull, isNull, like, sql } from "drizzle-orm";
 import type { Item, ItemSource, ItemType, SourceRef } from "@/core/domain/item";
 import { isItemType } from "@/core/domain/item";
 import type { DatabaseHandle, Db, RawSqlite } from "../connection";
@@ -216,9 +216,26 @@ export class ItemsRepository {
     };
   }
 
-  /** Canali noti con conteggio, per il filtro dell'archivio. */
-  authorsWithCounts(): { name: string; url: string; count: number }[] {
+  /**
+   * Item senza thumbnail locale ma con un URL da cui recuperarla: la coda
+   * del backfill automatico (i più recenti prima). Senza URL non c'è
+   * nulla da scaricare e non compaiono.
+   */
+  listMissingThumbnails(limit: number): Item[] {
     const rows = this.db
+      .select()
+      .from(items)
+      .where(and(isNull(items.thumbnailPath), isNotNull(items.url)))
+      .orderBy(desc(items.id))
+      .limit(limit)
+      .all();
+    const result = rows.map((row) => this.toDomain(row, []));
+    this.attachTags(result);
+    return result;
+  }
+
+  /** Canali noti con conteggio, per il filtro dell'archivio. */
+  authorsWithCounts(): { name: string; url: string; count: number }[] {    const rows = this.db
       .select({
         name: items.authorName,
         url: items.authorUrl,

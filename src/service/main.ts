@@ -15,6 +15,7 @@ import {
 import { migrate } from "@/db/migrate";
 import { openNodeSqliteDatabase } from "@/db/node-sqlite-driver";
 import { createRuntime, type StashRuntime } from "@/core/runtime";
+import { backfillThumbnails } from "@/core/thumbnail-backfill";
 import { BOT_COMMANDS, createStashBot } from "@/bot/stash-bot";
 import type { Bot } from "grammy";
 import { logEvent } from "@/service/log";
@@ -168,6 +169,51 @@ async function main(): Promise<void> {
   });
 
   installShutdown(runtime, web, bot);
+  startThumbnailBackfill(runtime);
+}
+
+/**
+ * Il backfill delle thumbnail gira in background: una scansione all'avvio
+ * (recupera le thumbnail mancate in passato) e poi una ogni 6 ore (riprende
+ * gli item arrivati mentre la rete era giù). I fallimenti si ritentano al
+ * run successivo; l'arresto del servizio non lo attende.
+ */
+function startThumbnailBackfill(runtime: StashRuntime): void {
+  const INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+  const run = (trigger: string): void => {
+    void backfillThumbnails(runtime, {
+      onItem: (result) => {
+        if (!result.ok) {
+          logEvent("warn", "thumb_backfill_item_failed", "Thumbnail non recuperabile per un item", {
+            item_id: result.itemId,
+            via: result.via,
+            error: result.error,
+          });
+        }
+      },
+    })
+      .then((summary) => {
+        if (summary.scanned > 0) {
+          logEvent("info", "thumb_backfill_done", "Backfill delle thumbnail completato", {
+            trigger,
+            scanned: summary.scanned,
+            fetched: summary.fetched,
+            failed: summary.failed,
+          });
+        }
+      })
+      .catch((error) => {
+        logEvent("error", "thumb_backfill_failed", "Backfill delle thumbnail interrotto da un errore", {
+          trigger,
+          error,
+        });
+      });
+  };
+
+  run("startup");
+  const timer = setInterval(() => run("periodic"), INTERVAL_MS);
+  timer.unref();
 }
 
 function installShutdown(runtime: StashRuntime, web: WebUiHandle | undefined, bot: Bot | undefined): void {
