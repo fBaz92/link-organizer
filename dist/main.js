@@ -22834,7 +22834,9 @@ var FORCE_EXIT_MS = 2e4;
 async function serviceVersion() {
   const candidates = [
     fileURLToPath(new URL("../VERSION", import.meta.url)),
-    path8.resolve(path8.dirname(process.argv[1] ?? ""), "../VERSION")
+    path8.resolve(path8.dirname(process.argv[1] ?? ""), "../VERSION"),
+    // Con tsx argv[1] è il runner: gli script npm partono dalla radice del repo.
+    path8.join(process.cwd(), "VERSION")
   ];
   for (const candidate of candidates) {
     try {
