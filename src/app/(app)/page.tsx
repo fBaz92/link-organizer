@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { X } from "lucide-react";
 import { isItemType, type ItemType } from "@/core/domain/item";
-import { getRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 import { ItemCard } from "@/components/item-card";
 import { FiltersBar } from "@/components/filters-bar";
 import { Pagination } from "@/components/pagination";

@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { isAuthenticated } from "@/lib/auth";
-import { getRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 
 /*
  * Flow: download del file associato a un item. Route autenticata (stessa

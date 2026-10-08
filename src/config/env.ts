@@ -1,3 +1,4 @@
+import { networkInterfaces } from "node:os";
 import path from "node:path";
 
 /*
@@ -7,9 +8,60 @@ import path from "node:path";
  * i test possono iniettare valori senza mutazioni globali fragili.
  */
 
-/** Cartella dati di Stash: db SQLite, file scaricati, thumbnail. */
+/*
+ * Cartella dati di Stash: db SQLite, file scaricati, thumbnail. In un
+ * deploy HomeGate vince HOMEGATE_STATE_DIR (dati persistenti fuori dalla
+ * release); in sviluppo si usa DATA_DIR o ./data.
+ */
 export function dataDir(): string {
-  return process.env.DATA_DIR ?? path.join(process.cwd(), "data");
+  return (
+    process.env.HOMEGATE_STATE_DIR?.trim() ||
+    process.env.DATA_DIR?.trim() ||
+    path.join(process.cwd(), "data")
+  );
+}
+
+/**
+ * Cartella della configurazione gestita: HomeGate espone il .env in
+ * HOMEGATE_CONFIG_DIR; senza HomeGate si torna alla cwd del processo.
+ */
+export function configDir(): string {
+  return process.env.HOMEGATE_CONFIG_DIR?.trim() || process.cwd();
+}
+
+/** Porta HTTP del visualizzatore incluso nel servizio. */
+export const DEFAULT_SERVICE_PORT = 8787;
+
+/** PORT valida: intero 1024-65535, altrimenti il default del servizio. */
+export function httpPort(): number {
+  const raw = (process.env.PORT ?? "").trim();
+  if (raw === "") return DEFAULT_SERVICE_PORT;
+  const port = Number.parseInt(raw, 10);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`PORT non valida: "${raw}" (atteso un intero tra 1024 e 65535)`);
+  }
+  return port;
+}
+
+/**
+ * URL pubblico della web UI per i deep link del bot. Se non configurato si
+ * stima dall'indirizzo LAN della macchina (primo IPv4 non interno), così i
+ * link aprono il visualizzatore incluso nel servizio.
+ */
+export function guessWebAppUrl(port: number): string {
+  const configured = process.env.WEB_APP_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  const lan = primaryLanIPv4();
+  return `http://${lan ?? "localhost"}:${port}`;
+}
+
+function primaryLanIPv4(): string | undefined {
+  for (const interfaces of Object.values(networkInterfaces())) {
+    for (const info of interfaces ?? []) {
+      if (info.family === "IPv4" && !info.internal) return info.address;
+    }
+  }
+  return undefined;
 }
 
 export function telegramToken(): string | undefined {

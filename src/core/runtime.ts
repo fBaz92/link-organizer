@@ -1,7 +1,5 @@
-import { dataDir } from "@/config/env";
 import { telegramToken, ytDlpPath } from "@/config/env";
 import type { DatabaseHandle } from "@/db/connection";
-import { getDatabase } from "@/db";
 import { ItemsRepository } from "@/db/repositories/items";
 import { FileStore } from "@/core/files";
 import { IngestionService } from "@/core/ingestion";
@@ -12,9 +10,10 @@ import { VideoDownloadService } from "@/core/video-download";
 /*
  * Flow: il "composition root" del dominio. Bot, web e import costruiscono i
  * servizi dalla stessa factory così l'object graph è definito in UN punto.
- * getRuntime() memoizza su globalThis (come il DB) per sopravvivere all'hot
- * reload; createRuntime() è la versione esplicita per i test, che iniettano
- * i propri double.
+ * Questo modulo resta PURO (nessun driver SQLite importato): il chiamante
+ * decide il driver — better-sqlite3 per la webapp Next, node:sqlite per il
+ * servizio HomeGate — e passa la handle. Il singleton per la webapp vive in
+ * get-runtime.ts, così il bundle del servizio non trascina better-sqlite3.
  */
 
 export interface StashRuntime {
@@ -28,12 +27,11 @@ export interface StashRuntime {
 
 export function createRuntime(
   rootDir: string,
-  db?: DatabaseHandle,
+  db: DatabaseHandle,
   videoDownload?: VideoDownloadService,
 ): StashRuntime {
-  const handle = db ?? getDatabase();
   const files = new FileStore(rootDir);
-  const items = new ItemsRepository(handle);
+  const items = new ItemsRepository(db);
   // Per YouTube la strategia primaria è yt-dlp (descrizione completa + tag
   // dell'autore); senza binario cade in automatico sull'oEmbed online.
   const metadata = new MetadataFetcher(files, fetch, createYtDlpMetadataSource(ytDlpPath()));
@@ -44,14 +42,5 @@ export function createRuntime(
       ytDlpPath: ytDlpPath(),
       botToken: telegramToken(),
     });
-  return { db: handle, items, files, metadata, ingestion, videoDownload: downloads };
-}
-
-const globalForRuntime = globalThis as unknown as { __stashRuntime?: StashRuntime };
-
-export function getRuntime(): StashRuntime {
-  if (!globalForRuntime.__stashRuntime) {
-    globalForRuntime.__stashRuntime = createRuntime(dataDir());
-  }
-  return globalForRuntime.__stashRuntime;
+  return { db, items, files, metadata, ingestion, videoDownload: downloads };
 }

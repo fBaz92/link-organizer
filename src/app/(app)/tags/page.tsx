@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Tag } from "lucide-react";
-import { getRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 import { EmptyState } from "@/components/empty-state";
 
 /*

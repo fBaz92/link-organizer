@@ -2,7 +2,7 @@ import Link from "next/link";
 import { randomBytes } from "node:crypto";
 import { Dices } from "lucide-react";
 import { isItemType, ITEM_TYPES, ITEM_TYPE_LABELS, type ItemType } from "@/core/domain/item";
-import { getRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 import { ItemCard } from "@/components/item-card";
 import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";

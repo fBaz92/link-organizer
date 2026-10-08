@@ -10,7 +10,8 @@ import { loadDotEnv } from "@/config/dotenv";
 import { keywordTags } from "@/core/classify";
 import { isFallbackTitle } from "@/core/ingestion";
 import { logger } from "@/core/logger";
-import { createRuntime } from "@/core/runtime";
+import { dataDir } from "@/config/env";
+import { getRuntime } from "@/core/get-runtime";
 import { TAG_RULES } from "@/core/rules/tag-rules";
 import { createSemanticTagger, SEMANTIC_CACHE_FILE_NAME } from "@/core/semantic-tags";
 
@@ -38,8 +39,8 @@ const PAGE_SIZE = 200;
 
 async function main(): Promise<void> {
   loadDotEnv();
-  const rootDir = process.env.DATA_DIR ?? path.join(process.cwd(), "data");
-  const runtime = createRuntime(rootDir);
+  const rootDir = dataDir();
+  const runtime = getRuntime();
 
   // Vocabolario semantico: i tag delle regole + quelli realmente usati
   // nell'archivio — i suggerimenti restano nella lingua dell'archivio.

@@ -1,5 +1,5 @@
 import { isAuthenticated } from "@/lib/auth";
-import { getRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 
 /*
  * Flow: stato di un job di download video, per il polling del wizard.

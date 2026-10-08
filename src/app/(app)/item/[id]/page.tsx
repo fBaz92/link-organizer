@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowUpRight, Download, Link2, RefreshCw, Tv } from "lucide-react";
 import { ITEM_TYPE_LABELS } from "@/core/domain/item";
-import { getRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 import { reclassifyAction } from "@/app/actions";
 import { fullDate, formatBytes, domainOf, SOURCE_LABELS } from "@/lib/format";
 import { youtubeVideoId } from "@/core/url";

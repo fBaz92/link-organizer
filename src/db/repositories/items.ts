@@ -374,7 +374,7 @@ export class ItemsRepository {
 
   /** I tag senza item non interessano a nessuno: li si rimuove al volo. */
   private deleteOrphanTags(): void {
-    this.raw.exec(`DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM items_tags)`);
+    this.raw.prepare("DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM items_tags)").run();
   }
 
   /** Carica i tag per tutti gli item della lista in una sola query. */

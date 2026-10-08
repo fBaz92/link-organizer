@@ -1,19 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { useTheme } from "next-themes";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /*
- * Flow: toggle del tema a tre stati (sistema → chiaro → scuro). Monta solo
- * l'icona dopo l'hydration per evitare mismatch SSR.
+ * Flow: toggle del tema a tre stati (sistema → chiaro → scuro). `mounted` via
+ * useSyncExternalStore evita mismatch SSR senza setState dentro l'effect.
  */
+const emptySubscribe = () => () => {};
+
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => setMounted(true), []);
+  const mounted = useSyncExternalStore(emptySubscribe, () => true, () => false);
 
   if (!mounted) return <Button variant="ghost" size="icon" aria-label="Tema" />;
 

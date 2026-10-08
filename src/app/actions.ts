@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { assertAuthenticated, setSessionCookie, clearSessionCookie, authEnabled, verifySessionValue } from "@/lib/auth";
 import { telegramUploadChatId } from "@/config/env";
-import { getRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 import { logger } from "@/core/logger";
 import { normalizeUrl, youtubeThumbnailUrl } from "@/core/url";
 import { rankBySimilarity, similarityFieldsOfItem } from "@/core/similarity";

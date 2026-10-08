@@ -1,5 +1,5 @@
 import { isAuthenticated } from "@/lib/auth";
-import { getRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 
 /*
  * Flow: thumbnail di un item (route autenticata — le immagini sono nella

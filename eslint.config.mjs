@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Bundle del servizio HomeGate: artefatto di build (esbuild), non sorgente.
+    "dist/**",
   ]),
 ]);
 

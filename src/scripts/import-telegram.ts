@@ -3,7 +3,8 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { loadDotEnv } from "@/config/dotenv";
 import { logger } from "@/core/logger";
-import { createRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
+import type { StashRuntime } from "@/core/runtime";
 import { extractFromEntities, extractUrls } from "@/core/extract-urls";
 
 /*
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const runtime = createRuntime(process.env.DATA_DIR ?? path.join(process.cwd(), "data"));
+  const runtime = getRuntime();
   const summary: ImportSummary = { messages: 0, created: 0, duplicates: 0, errors: 0 };
   const dateOf = (message: ExportMessage): Date | undefined =>
     message.date ? new Date(message.date) : undefined;
@@ -165,8 +166,8 @@ async function ingest(summary: ImportSummary, run: () => Promise<{ status: strin
 
 /** Arricchisce l'item più recente ancora privo di descrizione (per --meta). */
 async function enrichNewest(
-  ingestion: ReturnType<typeof createRuntime>["ingestion"],
-  items: ReturnType<typeof createRuntime>["items"],
+  ingestion: StashRuntime["ingestion"],
+  items: StashRuntime["items"],
 ): Promise<void> {
   const [newest] = items.list({ limit: 1, offset: 0 }).items;
   if (newest && !newest.description) {

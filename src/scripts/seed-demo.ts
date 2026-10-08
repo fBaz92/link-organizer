@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadDotEnv } from "@/config/dotenv";
 import { logger } from "@/core/logger";
-import { createRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 
 /*
  * Flow: seed di dati DEMO per provare l'app senza rete (classificazione e
@@ -73,7 +73,7 @@ const DEMO_URLS: {
 async function main(): Promise<void> {
   loadDotEnv();
   logger.warn("Seed DEMO: aggiungo item di esempio all'archivio corrente.");
-  const runtime = createRuntime(process.env.DATA_DIR ?? path.join(process.cwd(), "data"));
+  const runtime = getRuntime();
 
   for (const demo of DEMO_URLS) {
     const result = await runtime.ingestion.ingest({ payload: { kind: "url", url: demo.url }, source: "web" });

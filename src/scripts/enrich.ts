@@ -1,10 +1,9 @@
 #!/usr/bin/env tsx
-import path from "node:path";
 import { loadDotEnv } from "@/config/dotenv";
 import type { Item } from "@/core/domain/item";
 import { isFallbackTitle } from "@/core/ingestion";
 import { logger } from "@/core/logger";
-import { createRuntime } from "@/core/runtime";
+import { getRuntime } from "@/core/get-runtime";
 
 /*
  * Flow: arricchimento metadati di MASSA sull'archivio esistente — il pezzo
@@ -49,7 +48,7 @@ async function main(): Promise<void> {
   loadDotEnv();
   const limit = intFlag("limit", Number.POSITIVE_INFINITY);
   const pauseMs = intFlag("pausa", 350);
-  const runtime = createRuntime(process.env.DATA_DIR ?? path.join(process.cwd(), "data"));
+  const runtime = getRuntime();
 
   let scanned = 0;
   let enriched = 0;
