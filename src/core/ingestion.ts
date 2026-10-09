@@ -54,6 +54,8 @@ export class IngestionError extends Error {
 }
 
 export class IngestionService {
+  /** Includes work whose HTTP caller has disconnected. */
+  activeOperations = 0;
   constructor(
     private readonly items: ItemsRepository,
     private readonly files: FileStore,
@@ -61,14 +63,21 @@ export class IngestionService {
   ) {}
 
   async ingest(input: IngestInput): Promise<IngestResult> {
-    if (input.payload.kind === "url") {
-      return this.ingestUrl(input, input.payload);
-    }
-    return this.ingestFile(input, input.payload);
+    this.activeOperations++;
+    try {
+      if (input.payload.kind === "url") return await this.ingestUrl(input, input.payload);
+      return await this.ingestFile(input, input.payload);
+    } finally { this.activeOperations--; }
   }
 
   /** Arricchisce un item con metadati di rete. Idempotente e sicuro da richiamare. */
   async enrichMetadata(item: Item): Promise<Item> {
+    this.activeOperations++;
+    try { return await this.enrich(item); }
+    finally { this.activeOperations--; }
+  }
+
+  private async enrich(item: Item): Promise<Item> {
     if (!item.url || item.type === "documento") return item;
 
     const metadata = await this.metadata.fetch(item.canonicalUrl ?? item.url);

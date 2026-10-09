@@ -8,7 +8,7 @@
     "dev:web": "next dev -p 3002",
     "dev:service": "tsx watch src/service/main.ts",
     "build": "next build",
-    "build:service": "esbuild src/service/main.ts --bundle --platform=node --format=esm --target=node22.13 --outfile=dist/main.js --legal-comments=none --banner:js=\"import { createRequire as __stashCreateRequire } from 'node:module'; const require = __stashCreateRequire(import.meta.url);\"",
+    "build:service": "esbuild src/service/main.ts --bundle --keep-names --platform=node --format=esm --target=node22.13 --outfile=dist/main.js --legal-comments=none --banner:js=\"import { createRequire as __stashCreateRequire } from 'node:module'; const require = __stashCreateRequire(import.meta.url);\"",
     "start": "concurrently -n web,service -c blue,green \"next start -p 3002\" \"tsx src/service/main.ts\"",
     "start:web": "next start -p 3002",
     "start:service": "tsx src/service/main.ts",
@@ -20,7 +20,7 @@
     "thumbs": "tsx src/scripts/thumbs.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:package": "bash scripts/package-check.sh",
+    "test:package": "bash scripts/package-check.sh && node scripts/telegram-check.mjs && node scripts/guardian-check.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint"
   },

@@ -11,8 +11,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<Response> {
   try {
-    const userVersion = getRuntime().db.raw.pragma("user_version", { simple: true });
-    return Response.json({ status: "ok", user_version: userVersion });
+    const runtime = getRuntime();
+    const userVersion = runtime.db.raw.pragma("user_version", { simple: true });
+    return Response.json({ status: "ok", user_version: userVersion, busy: runtime.ingestion.activeOperations > 0 });
   } catch (error) {
     return Response.json({ status: "error", error: String(error) }, { status: 503 });
   }

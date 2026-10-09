@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 #
 # Immagine del servizio HomeGate (profilo Docker, contratto docker-services):
-# - un solo processo web in foreground (la webapp Next completa) più il bot
-#   Telegram come worker nello stesso container (niente compose);
+# - guardian HTTP e worker Telegram sempre attivi; Next su loopback avviato
+#   su richiesta e arrestato dopo inattività (un container, niente compose);
 # - avvio con UID/GID non root assegnati da HomeGate: nessuno USER nominato;
 # - filesystem in sola lettura tranne /data (mount HomeGate), /tmp e /run:
 #   la cache di Next è un symlink verso /tmp/next-cache;
@@ -39,7 +39,7 @@ COPY --from=builder /build/.next/static ./web/.next/static
 COPY --from=builder /build/public ./web/public
 COPY --from=builder /build/dist/main.js ./service/main.js
 COPY --from=builder /build/VERSION ./VERSION
-COPY docker/entrypoint.mjs ./entrypoint.mjs
+COPY docker/*.mjs ./
 
 # Cache di Next (fetch/ottimizzazioni) su spazio scrivibile: il rootfs del
 # container è in sola lettura. /data è il mount persistente di HomeGate.

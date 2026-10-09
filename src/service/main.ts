@@ -20,6 +20,7 @@ import { BOT_COMMANDS, createStashBot } from "@/bot/stash-bot";
 import type { Bot } from "grammy";
 import { logEvent } from "@/service/log";
 import { startWebUi, type WebUiHandle } from "@/service/web-ui";
+import { startControl } from "@/service/control";
 
 /*
  * Flow: entrypoint del processo "bot" del servizio. Due modalità:
@@ -27,7 +28,8 @@ import { startWebUi, type WebUiHandle } from "@/service/web-ui";
  * - completa (default, runtime node di HomeGate o sviluppo): visualizzatore
  *   web leggero su PORT + bot Telegram;
  * - solo-bot (STASH_VIEWER=0, usata dal container Docker dove la web UI è
- *   la webapp Next completa in un processo separato): nessuna porta.
+ *   la webapp Next completa in un processo separato): nessuna porta pubblica;
+ *   un controllo privato su loopback gestisce readiness e job video.
  *
  * Arresto ordinato su SIGINT/SIGTERM entro i 10 secondi richiesti dal
  * contratto Docker (bot → web → checkpoint WAL → chiusura DB → exit 0,
@@ -113,10 +115,13 @@ async function main(): Promise<void> {
     logEvent("info", "viewer_disabled", "Visualizzatore interno disattivato: la web UI è la webapp Next");
   }
 
+  let botState = "starting";
+  const control = await startControl(runtime, () => botState);
+  const closeable = [web, control].filter((handle): handle is WebUiHandle => handle !== undefined);
   const token = telegramToken();
   const allowed = allowedUserIds();
   if (!token || allowed.length === 0) {
-    if (!withViewer) {
+    if (!withViewer && !control) {
       // Senza web di risparmio, un servizio solo-bot senza credenziali non
       // fa nulla: meglio fallire subito e rumorosamente.
       logEvent(
@@ -128,13 +133,14 @@ async function main(): Promise<void> {
       handle.raw.close();
       process.exit(1);
     }
+    botState = "disabled";
     logEvent(
       "warn",
       "bot_disabled",
-      "Bot Telegram non avviato: servono BOT_TOKEN e TELEGRAM_ALLOWED_USER_IDS nel .env; resta attivo solo il visualizzatore web",
+      "Bot Telegram non avviato: servono BOT_TOKEN e TELEGRAM_ALLOWED_USER_IDS; archivio web disponibile",
       { has_token: Boolean(token), allowed_count: allowed.length },
     );
-    installShutdown(runtime, web, undefined);
+    installShutdown(runtime, closeable, undefined);
     return;
   }
 
@@ -150,6 +156,7 @@ async function main(): Promise<void> {
     });
   });
 
+  const isStopping = installShutdown(runtime, closeable, bot);
   try {
     await bot.api.setMyCommands(BOT_COMMANDS.map((command) => ({ ...command })));
   } catch (error) {
@@ -157,18 +164,20 @@ async function main(): Promise<void> {
   }
 
   bot
-    .start()
+    .start({
+      onStart: () => { botState = "running"; logEvent("info", "bot_started", "Bot Telegram avviato (long polling)", {
+        allowed_users: allowed.length,
+        upload_chat_configured: process.env.TELEGRAM_UPLOAD_CHAT_ID !== undefined,
+      }); },
+    })
     .then(() => logEvent("info", "bot_stopped", "Polling del bot terminato"))
     .catch((error) => {
+      if (isStopping()) return;
+      botState = "failed";
       logEvent("error", "bot_start_failed", "Avvio del bot non riuscito: verificare BOT_TOKEN e rete", { error });
       process.exit(1);
     });
-  logEvent("info", "bot_started", "Bot Telegram avviato (long polling)", {
-    allowed_users: allowed.length,
-    upload_chat_configured: process.env.TELEGRAM_UPLOAD_CHAT_ID !== undefined,
-  });
 
-  installShutdown(runtime, web, bot);
   startThumbnailBackfill(runtime);
 }
 
@@ -216,7 +225,7 @@ function startThumbnailBackfill(runtime: StashRuntime): void {
   timer.unref();
 }
 
-function installShutdown(runtime: StashRuntime, web: WebUiHandle | undefined, bot: Bot | undefined): void {
+function installShutdown(runtime: StashRuntime, web: WebUiHandle[], bot: Bot | undefined): () => boolean {
   let stopping = false;
   const stop = (signal: string) => {
     if (stopping) return;
@@ -229,8 +238,8 @@ function installShutdown(runtime: StashRuntime, web: WebUiHandle | undefined, bo
     }, FORCE_EXIT_MS);
     force.unref();
 
-    const botStopped = bot ? bot.stop() : Promise.resolve();
-    const webClosed = web ? web.close() : Promise.resolve();
+    const botStopped = bot?.isRunning() ? bot.stop() : Promise.resolve();
+    const webClosed = Promise.all(web.map(handle => handle.close()));
     void Promise.allSettled([botStopped, webClosed])
       .then(async () => {
         try {
@@ -250,6 +259,7 @@ function installShutdown(runtime: StashRuntime, web: WebUiHandle | undefined, bo
 
   process.once("SIGINT", () => stop("SIGINT"));
   process.once("SIGTERM", () => stop("SIGTERM"));
+  return () => stopping;
 }
 
 process.on("uncaughtException", (error) => {

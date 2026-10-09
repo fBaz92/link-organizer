@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { logEvent, structuredLine } from "./log";
+import { HttpError } from "grammy";
 
 /*
  * Flow: test del logger strutturato richiesto da HomeGate: UNA riga JSON
@@ -7,6 +8,17 @@ import { logEvent, structuredLine } from "./log";
  */
 
 describe("logger strutturato", () => {
+  it("conserva la causa di rete di grammY senza esporre il token nell'URL", () => {
+    const network = Object.assign(new Error("request to https://api.telegram.org/bot123:fake-secret/getMe failed"), {
+      code: "ENOTFOUND", syscall: "getaddrinfo", hostname: "api.telegram.org",
+    });
+    const line = structuredLine("warn", "bot_commands_failed", "Richiesta fallita", {
+      error: new HttpError("Network request for 'setMyCommands' failed!", network),
+    });
+    expect(JSON.parse(line).error.error.code).toBe("ENOTFOUND");
+    expect(JSON.parse(line).error.error.hostname).toBe("api.telegram.org");
+    expect(line).not.toContain("123:fake-secret");
+  });
   it("produce una sola riga JSON con ts, level, event e summary", () => {
     const line = structuredLine("info", "service_starting", "Avvio del servizio Stash", {
       version: "1.0.0",

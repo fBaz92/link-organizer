@@ -31,7 +31,7 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm build:service
-      - run: bash scripts/package-check.sh
+      - run: pnpm test:package
 
       - name: VERSION coerente con la richiesta
         run: |
@@ -54,13 +54,14 @@ jobs:
       - name: Login su GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+      - uses: docker/setup-qemu-action@v3
+
       - name: Buildx multi-arch e push
         run: |
           docker buildx create --use
           docker buildx build \
             --platform linux/arm64,linux/amd64 \
             --tag "${IMAGE}:v${{ inputs.version }}" \
-            --tag "${IMAGE}:stable" \
             --push \
             .
 
@@ -73,8 +74,14 @@ jobs:
             *) echo "digest inatteso: ${DIGEST}" >&2; exit 1 ;;
           esac
 
-      - name: Prova locale dell'immagine (architettura del runner)
-        run: bash scripts/docker-check.sh "${IMAGE}:v${{ inputs.version }}"
+      - name: Prova immagine amd64
+        run: DOCKER_DEFAULT_PLATFORM=linux/amd64 bash scripts/docker-check.sh "${IMAGE}:v${{ inputs.version }}"
+
+      - name: Prova immagine arm64
+        run: DOCKER_DEFAULT_PLATFORM=linux/arm64 bash scripts/docker-check.sh "${IMAGE}:v${{ inputs.version }}"
+
+      - name: Promuovi l'immagine verificata a stable
+        run: docker buildx imagetools create --tag "${IMAGE}:stable" "${IMAGE}@${{ steps.digest.outputs.digest }}"
 
       - name: Pin del digest nel manifest e release
         run: |

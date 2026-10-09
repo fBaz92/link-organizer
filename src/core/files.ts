@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
-import { mkdir, copyFile, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, copyFile, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /*
@@ -45,8 +46,23 @@ export class FileStore {
   }
 
   async saveFromSourceFile(sourcePath: string, originalName: string, subdir: "files" | "thumbs"): Promise<StoredFile> {
-    const bytes = await readFile(sourcePath);
-    return this.saveBytes(new Uint8Array(bytes), originalName, subdir);
+    const digest = createHash("sha256");
+    let size = 0;
+    for await (const chunk of createReadStream(sourcePath)) {
+      size += chunk.length;
+      this.assertReasonableSize(size);
+      digest.update(chunk);
+    }
+    const hash = digest.digest("hex");
+    const target = path.join(subdir, `${hash}${safeExtension(originalName)}`);
+    const absolute = this.absolutePath(target);
+    await mkdir(path.dirname(absolute), { recursive: true });
+    const staged = `${absolute}.${randomUUID()}.tmp`;
+    try {
+      await copyFile(sourcePath, staged);
+      await rename(staged, absolute);
+    } finally { await rm(staged, { force: true }); }
+    return { relativePath: target, fileName: sanitizeFileName(originalName), hash, size };
   }
 
   /** Usato dal bot e dall'import: sposta il file nello store e ne calcola l'hash. */

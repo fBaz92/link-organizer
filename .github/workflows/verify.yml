@@ -33,7 +33,7 @@ jobs:
         run: pnpm build:service
 
       - name: Prova del pacchetto bot estratto
-        run: bash scripts/package-check.sh
+        run: pnpm test:package
 
       - name: Build della webapp (standalone, come nell'immagine)
         run: pnpm build

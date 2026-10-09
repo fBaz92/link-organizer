@@ -8,7 +8,7 @@ Web UI (lettura) ─┼──► IngestionService ──► SQLite (FTS5) ──
 Import CLI ───────┘      (dedup + tag)
 ```
 
-Il repository è un **servizio [HomeGate](https://github.com/fBaz92/homegate)** con **profilo Docker** (HomeGate ≥ 0.8.0, Docker Engine ≥ 28 sul gateway): dal wizard **Servizi → Aggiungi servizio** si seleziona la repo, si configura e si installa; gli aggiornamenti arrivano dalle release successive. Il container ospita la **webapp Next completa** e il **bot Telegram** in un unico processo supervisory.
+Il progetto funziona anche senza HomeGate. Il repository include un **servizio [HomeGate](https://github.com/fBaz92/homegate)** con **profilo Docker** (HomeGate ≥ 0.8.0, Docker Engine ≥ 28 sul gateway): dal wizard **Servizi → Aggiungi servizio** si seleziona la repo, si configura e si installa; gli aggiornamenti arrivano dalle release successive. Un solo container ospita la **webapp Next completa**, il **bot Telegram** e un modulo HTTP leggero che gestisce il riposo della webapp.
 
 - **Dentro il container**: webapp completa (ricerca, filtri, note, wizard download video), bot Telegram, yt-dlp e ffmpeg già inclusi.
 - **Sviluppo locale** (fuori da HomeGate): tutto come prima — `pnpm dev` avvia webapp Next e bot sullo stesso database.
@@ -45,19 +45,26 @@ Procedura:
 4. **Database**: puoi caricare uno snapshot SQLite esistente (`stash.db`, `user_version = 2`) oppure lasciare che venga creato al primo avvio. Il file `data/stash.db` di versioni precedenti (1.x o sviluppo locale) è già nel formato giusto.
 5. Scegli nome e URL e installa. L'URL pubblico è `http://<ip-gateway>:8790` (il proxy HomeGate; la porta del container non è esposta in LAN).
 
+Le specifiche HomeGate sono conservate in [docs/homegate](docs/homegate/README.md), con versione, provenienza e verifica del contratto.
+
 ### Riposo, risveglio e bot
 
-Dopo `HOMEGATE_IDLE_MINUTES` senza richieste il **container si ferma** (default del manifest: 1440 minuti = 24 h); al primo accesso riparte e la pagina di attesa mostra l'app quando `/health` risponde. Conseguenze e mitigazioni:
+Dalla versione 2.2.0 **Telegram resta attivo anche quando la webapp dorme**. Dopo 5 minuti senza richieste della webapp, il modulo di supervisione arresta Next e ne libera la memoria. Se `HOMEGATE_IDLE_MINUTES` è inferiore a 5, usa quella soglia. La prima richiesta successiva riavvia Next e viene inoltrata senza perdere metodo, corpo o upload. Le richieste simultanee condividono un solo avvio.
 
-- **Durante il riposo anche il bot Telegram è fermo**: nessun dump finché qualcuno non apre la webapp. Tieni il timeout alto, oppure lascia una scheda della webapp aperta (una connessione SSE `/api/keepalive` tiene sveglio il container finché la scheda è visibile — pensato anche per un tablet a muro).
-- **Avvia/Arresta/Riprendi** dalla pagina del servizio; un aggiornamento richiede prima di avviare o riprendere un container fermo.
+L'installazione resta unica, dalla stessa repo GitHub. In HomeGate una connessione SSE autenticata attraverso il proxy mantiene attivo il container, secondo il contratto sulle richieste in corso. La webapp può quindi riposare internamente. Non servono un secondo container, il socket Docker o l'opzione manuale "Sempre attivo". `/health` mostra stato del bot, stato della webapp e connessione al proxy, senza risvegliare Next.
+
+Il modulo rileva automaticamente il proxy HomeGate tramite il gateway di rete del container e la porta pubblica 8790. In reti Docker personalizzate si può impostare `STASH_HOMEGATE_PROXY_URL`; se il collegamento non riesce, `/health` mostra `homegate.lease = "failed"` e i log indicano il problema. In quel caso il gateway può ancora arrestare tutto il container: correggere la rete oppure usare temporaneamente "Sempre attivo".
+
+I download avviati dalla webapp appartengono allo stesso worker che gestisce Telegram. Chiudere il browser e lasciare dormire Next non interrompe il video; il job resta consultabile al risveglio. Il bot salva link e gestisce i comandi direttamente, senza dover avviare Next.
+
+**Arresto manuale e pausa HomeGate** agiscono ancora sull'intero container e fermano anche Telegram. La pausa mantiene la RAM. Un job in corso non sopravvive a un arresto completo, a un crash del worker o a un aggiornamento: completare i download prima di queste operazioni.
 
 ### Com'è fatto il container
 
-- Un solo container (niente compose): `docker/entrypoint.mjs` fa da supervisor PID-1 e avvia la **webapp Next standalone** (processo primario, readiness `/health`) e il **bot** (worker secondario: se il token è errato la webapp resta su e l'errore è nei log).
-- Filesystem in sola lettura tranne `/data` (dati persistenti: SQLite, file, thumbnail), `/tmp` e `/run`; la cache di Next vive su `/tmp`. UID/GID non root assegnati da HomeGate.
-- SIGTERM gestito entro 10 secondi (checkpoint del WAL incluso); ogni evento è un oggetto JSON su una riga, senza segreti.
-- Il proxy HomeGate accetta body fino a **16 MiB** per richiesta: per file più grandi usa il bot Telegram (fino a 20 MB) o l'import locale. Le connessioni SSE tengono sveglio il servizio; timeout di lettura 30 s (keepalive a 15 s).
+- Un solo container. `docker/entrypoint.mjs` supervisiona il worker Telegram e avvia Next su loopback solo quando serve. Il modulo HTTP pubblico ascolta su `0.0.0.0:3000`; il worker privato è accessibile soltanto su loopback con un token casuale per ogni avvio.
+- All'avvio vengono verificati archivio e webapp; dopo il primo riposo la readiness resta disponibile tramite il modulo leggero. Se il worker termina viene riavviato automaticamente. Un errore Telegram compare nello stato del bot e nei log senza rendere inaccessibile l'archivio web.
+- Filesystem in sola lettura tranne `/data`, `/tmp` e `/run`; cache Next su `/tmp`. UID/GID non root arbitrari, SIGTERM entro 10 secondi, database SQLite condiviso senza migrazioni incompatibili.
+- Il proxy HomeGate accetta body fino a **16 MiB**. Le connessioni SSE inviano keepalive ogni 15 secondi. Una scheda web aperta tiene attivo Next; la connessione interna di Telegram mantiene solo il container.
 
 ## Aggiornamenti
 
@@ -78,7 +85,7 @@ Dopo `HOMEGATE_IDLE_MINUTES` senza richieste il **container si ferma** (default 
 # 2) dalla GitHub Action "docker-release" → Run workflow con la versione
 ```
 
-Il workflow: test → build immagine `linux/arm64`+`linux/amd64` → push su `ghcr.io/fbaz92/link-organizer` (tag `vX.Y.Z` e `stable` per comodità; il manifest usa solo il **digest immutabile**) → prova del container (`scripts/docker-check.sh`) → commit del digest in `service.toml` → tag `vX.Y.Z` e canale `stable` sullo stesso commit.
+Il workflow: test → build immagine `linux/arm64`+`linux/amd64` → push su `ghcr.io/fbaz92/link-organizer` (tag `vX.Y.Z` e `stable` per comodità; il manifest usa solo il **digest immutabile**) → prova del container su entrambe le architetture (`scripts/docker-check.sh`) → promozione `stable` → commit del digest in `service.toml` → tag `vX.Y.Z` e canale `stable` sullo stesso commit.
 
 > Dopo il primissimo push, il pacchetto GHCR nasce privato: rendilo pubblico (Impostazioni del pacchetto) oppure predisponi `sudo docker login` di sola lettura sul gateway — il token GitHub del wizard non autorizza registry privati.
 
@@ -114,13 +121,13 @@ Script CLI (solo sviluppo): `pnpm import:telegram`, `pnpm enrich`, `pnpm thumbs`
 
 ```bash
 pnpm test            # suite: dominio, bot, DB (due driver SQLite), backfill, contratto Docker
-pnpm test:package    # bundle bot estratto: avvio, HTTP, SIGTERM→exit 0
+pnpm test:package    # bundle estratto + Telegram simulato: polling, /stat, SIGTERM→exit 0
 bash scripts/docker-check.sh   # container: build, /health, auth, RO fs, UID non root, SIGTERM
 pnpm typecheck && pnpm build   # webapp standalone
 ```
 
 ## Limiti noti
 
-- Durante il **riposo del container** il bot Telegram è fermo (mitigato da `HOMEGATE_IDLE_MINUTES` alto e dal keepalive a scheda aperta): è il modello del profilo Docker di HomeGate, non un difetto configurabile lato app.
+- Arresto completo o pausa del container fermano Telegram. Il riposo automatico ordinario è gestito internamente e arresta soltanto Next. I job vivono nel worker e non sopravvivono al suo riavvio.
 - Upload via web limitati a **16 MiB** per richiesta (proxy HomeGate): oltre, usa il bot.
 - I tag semantici restano uno script di sviluppo (`pnpm auto-tag`): il modello locale non entra nel container.

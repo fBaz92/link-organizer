@@ -5,9 +5,10 @@ import { redirect } from "next/navigation";
 import { writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { assertAuthenticated, setSessionCookie, clearSessionCookie, authEnabled, verifySessionValue } from "@/lib/auth";
+import { assertAuthenticated, setSessionCookie, clearSessionCookie, authEnabled } from "@/lib/auth";
 import { telegramUploadChatId } from "@/config/env";
 import { getRuntime } from "@/core/get-runtime";
+import { startWebVideoJob } from "@/core/web-video-jobs";
 import { logger } from "@/core/logger";
 import { normalizeUrl, youtubeThumbnailUrl } from "@/core/url";
 import { rankBySimilarity, similarityFieldsOfItem } from "@/core/similarity";
@@ -227,8 +228,7 @@ export async function startVideoDownloadByItemAction(itemId: number): Promise<Ac
     };
   }
 
-  const { videoDownload } = getRuntime();
-  const result = videoDownload.start({ itemId, chatId, source: "web" });
+  const result = await startWebVideoJob({ itemId, chatId, source: "web" });
   if (!result.ok) return { ok: false, message: result.error };
   return { ok: true, message: "Download avviato.", jobId: result.job.id };
 }
@@ -250,8 +250,7 @@ export async function startVideoDownloadByUrlAction(url: string): Promise<Action
     };
   }
 
-  const { videoDownload } = getRuntime();
-  const result = videoDownload.start({ url: trimmed, chatId, source: "web" });
+  const result = await startWebVideoJob({ url: trimmed, chatId, source: "web" });
   if (!result.ok) return { ok: false, message: result.error };
   refreshItemPaths(result.job.itemId ?? undefined);
   return { ok: true, message: "Download avviato.", jobId: result.job.id };
