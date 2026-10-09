@@ -508,7 +508,7 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
         await confirm(ctx, duplicateMessage(result.existing, webAppUrl));
       }
     } catch (error) {
-      if (error instanceof IngestionError) {
+      if (error instanceof IngestionError && error.reason === "invalid-url") {
         await confirm(ctx, `⚠️ Archiviazione fallita: ${escapeHtml(error.message)}`);
       } else { throw error; }
     }

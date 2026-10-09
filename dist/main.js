@@ -23419,7 +23419,7 @@ ${body}`, {
         await confirm(ctx, duplicateMessage(result.existing, webAppUrl));
       }
     } catch (error) {
-      if (error instanceof IngestionError) {
+      if (error instanceof IngestionError && error.reason === "invalid-url") {
         await confirm(ctx, `\u26A0\uFE0F Archiviazione fallita: ${escapeHtml2(error.message)}`);
       } else {
         throw error;

@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { Update, UserFromGetMe } from "grammy/types";
 import { createStashBot, parseSearchQuery } from "@/bot/stash-bot";
 import { openDatabase, type DatabaseHandle } from "@/db/connection";
@@ -46,6 +46,7 @@ describe("StashBot", () => {
   let items: ItemsRepository;
   let sentMessages: { text: string; chatId: number; buttons?: { text: string; data: string }[] }[];
   let uploads: VideoUploadInput[];
+  let runtime: StashRuntime;
   let bot: ReturnType<typeof createStashBot>;
   let updateId = 100;
 
@@ -69,7 +70,7 @@ describe("StashBot", () => {
         uploads.push(input);
       },
     });
-    const runtime: StashRuntime = {
+    runtime = {
       db: handle,
       items,
       files,
@@ -201,6 +202,27 @@ describe("StashBot", () => {
       for (const url of urls) expect(items.list({ limit: 100, offset: 0 }).items.some(item => item.url === url)).toBe(true);
     } finally {
       failReplies = false;
+    }
+  });
+
+  it("mantiene ritentabili gli errori del disco durante l'archiviazione dei documenti", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("document"));
+    const absorb = vi.spyOn(runtime.files, "absorbFile").mockRejectedValueOnce(new Error("ENOSPC"));
+    let intercept = true;
+    bot.api.config.use(async (previous, method, payload, signal) => {
+      if (intercept && method === "getFile") return { ok: true, result: { file_id: "doc", file_unique_id: "doc", file_path: "documents/test.pdf" } } as never;
+      return previous(method, payload, signal);
+    });
+    const update = updateWith("");
+    if (!update.message) throw new Error("Missing fixture message");
+    delete update.message.text;
+    update.message.document = { file_id: "doc", file_unique_id: "doc", file_name: "test.pdf", file_size: 8 };
+    try {
+      await expect(bot.handleUpdate(update)).rejects.toThrow("Impossibile leggere il file");
+    } finally {
+      intercept = false;
+      fetchMock.mockRestore();
+      absorb.mockRestore();
     }
   });
 
