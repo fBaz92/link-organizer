@@ -62,4 +62,19 @@ export const MIGRATIONS: string[][] = [
     `ALTER TABLE items ADD COLUMN author_url TEXT`,
     `CREATE INDEX IF NOT EXISTS items_author_url_idx ON items (author_url)`,
   ],
+  [
+    // v3: durable Telegram intake, separate from processing and replies.
+    `CREATE TABLE IF NOT EXISTS telegram_inbox_offset (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      next_offset INTEGER NOT NULL
+    )`,
+    `INSERT OR IGNORE INTO telegram_inbox_offset (id, next_offset) VALUES (1, 0)`,
+    `CREATE TABLE IF NOT EXISTS telegram_inbox (
+      update_id INTEGER PRIMARY KEY,
+      update_json TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt INTEGER NOT NULL DEFAULT 0
+    )`,
+    `CREATE INDEX IF NOT EXISTS telegram_inbox_due_idx ON telegram_inbox (next_attempt, update_id)`,
+  ],
 ];

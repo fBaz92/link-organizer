@@ -189,6 +189,21 @@ describe("StashBot", () => {
     expect(sentMessages.length).toBe(before);
   });
 
+  it("archivia tutti i link di un messaggio anche se Telegram rifiuta le conferme", async () => {
+    const urls = Array.from({ length: 6 }, (_, i) => `https://${HOST}/backlog-links-${i}`);
+    let failReplies = true;
+    bot.api.config.use(async (previous, method, payload, signal) => {
+      if (failReplies && method === "sendMessage") throw new Error("Telegram unavailable");
+      return previous(method, payload, signal);
+    });
+    try {
+      await bot.handleUpdate(updateWith(urls.join("\n")));
+      for (const url of urls) expect(items.list({ limit: 100, offset: 0 }).items.some(item => item.url === url)).toBe(true);
+    } finally {
+      failReplies = false;
+    }
+  });
+
   it("/cerca trova con paginazione e /lucky risponde", async () => {
     await bot.handleUpdate(updateWith("/cerca video"));
     expect(sentMessages.at(-1)!.text).toContain("Ricerca");

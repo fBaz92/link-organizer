@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase, type DatabaseHandle } from "./connection";
+import { MIGRATIONS } from "@/db/schema.sql";
 import { migrate } from "./migrate";
 import { openNodeSqliteDatabase } from "./node-sqlite-driver";
 import { ItemsRepository } from "./repositories/items";
@@ -20,7 +21,7 @@ describe("driver node:sqlite", () => {
     const handle = openNodeSqliteDatabase(":memory:");
     try {
       migrate(handle.raw);
-      expect(handle.raw.pragma("user_version", { simple: true })).toBe(2);
+      expect(handle.raw.pragma("user_version", { simple: true })).toBe(MIGRATIONS.length);
       const tables = handle.raw
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
         .all()
@@ -126,7 +127,7 @@ describe("retrocompatibilità del file di database fra driver", () => {
 
     const service: DatabaseHandle = openNodeSqliteDatabase(file);
     try {
-      expect(service.raw.pragma("user_version", { simple: true })).toBe(2);
+      expect(service.raw.pragma("user_version", { simple: true })).toBe(MIGRATIONS.length);
       const items = new ItemsRepository(service);
       const found = items.list({ q: "webapp", limit: 10, offset: 0 });
       expect(found.total).toBe(1);

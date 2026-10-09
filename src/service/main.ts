@@ -17,7 +17,7 @@ import { openNodeSqliteDatabase } from "@/db/node-sqlite-driver";
 import { createRuntime, type StashRuntime } from "@/core/runtime";
 import { backfillThumbnails } from "@/core/thumbnail-backfill";
 import { BOT_COMMANDS, createStashBot } from "@/bot/stash-bot";
-import type { Bot } from "grammy";
+import { startTelegramInbox } from "@/service/telegram-inbox";
 import { logEvent } from "@/service/log";
 import { startWebUi, type WebUiHandle } from "@/service/web-ui";
 import { startControl } from "@/service/control";
@@ -150,33 +150,34 @@ async function main(): Promise<void> {
     webAppUrl,
     botToken: token,
   });
-  bot.catch((error) => {
-    logEvent("error", "bot_update_failed", "Errore nella gestione di un aggiornamento Telegram", {
-      error: error.error,
-    });
+  const intake: { started?: Promise<Awaited<ReturnType<typeof startTelegramInbox>>> } = {};
+  const isStopping = installShutdown(runtime, closeable, async () => {
+    const inbox = await intake.started?.catch(() => undefined);
+    await inbox?.stop();
   });
-
-  const isStopping = installShutdown(runtime, closeable, bot);
   try {
     await bot.api.setMyCommands(BOT_COMMANDS.map((command) => ({ ...command })));
   } catch (error) {
     logEvent("warn", "bot_commands_failed", "Registrazione dei comandi non riuscita (si prosegue)", { error });
   }
 
-  bot
-    .start({
-      onStart: () => { botState = "running"; logEvent("info", "bot_started", "Bot Telegram avviato (long polling)", {
+  if (isStopping()) return;
+  intake.started = startTelegramInbox(bot, handle.raw, {
+    onStart: () => {
+      botState = "running";
+      logEvent("info", "bot_started", "Bot Telegram avviato (coda persistente)", {
         allowed_users: allowed.length,
         upload_chat_configured: process.env.TELEGRAM_UPLOAD_CHAT_ID !== undefined,
-      }); },
-    })
-    .then(() => logEvent("info", "bot_stopped", "Polling del bot terminato"))
-    .catch((error) => {
-      if (isStopping()) return;
-      botState = "failed";
-      logEvent("error", "bot_start_failed", "Avvio del bot non riuscito: verificare BOT_TOKEN e rete", { error });
-      process.exit(1);
-    });
+      });
+    },
+    onError: (error) => logEvent("error", "bot_update_retry", "Errore Telegram: aggiornamento conservato e ritentato", { error }),
+  });
+  void intake.started.catch((error) => {
+    if (isStopping()) return;
+    botState = "failed";
+    logEvent("error", "bot_start_failed", "Avvio del bot non riuscito: verificare BOT_TOKEN e rete", { error });
+    process.exit(1);
+  });
 
   startThumbnailBackfill(runtime);
 }
@@ -225,7 +226,7 @@ function startThumbnailBackfill(runtime: StashRuntime): void {
   timer.unref();
 }
 
-function installShutdown(runtime: StashRuntime, web: WebUiHandle[], bot: Bot | undefined): () => boolean {
+function installShutdown(runtime: StashRuntime, web: WebUiHandle[], stopIntake: (() => Promise<void>) | undefined): () => boolean {
   let stopping = false;
   const stop = (signal: string) => {
     if (stopping) return;
@@ -238,7 +239,7 @@ function installShutdown(runtime: StashRuntime, web: WebUiHandle[], bot: Bot | u
     }, FORCE_EXIT_MS);
     force.unref();
 
-    const botStopped = bot?.isRunning() ? bot.stop() : Promise.resolve();
+    const botStopped = stopIntake?.() ?? Promise.resolve();
     const webClosed = Promise.all(web.map(handle => handle.close()));
     void Promise.allSettled([botStopped, webClosed])
       .then(async () => {

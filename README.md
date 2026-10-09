@@ -121,13 +121,14 @@ Script CLI (solo sviluppo): `pnpm import:telegram`, `pnpm enrich`, `pnpm thumbs`
 
 ```bash
 pnpm test            # suite: dominio, bot, DB (due driver SQLite), backfill, contratto Docker
-pnpm test:package    # bundle estratto + Telegram simulato: polling, /stat, SIGTERM→exit 0
+pnpm test:package    # bundle estratto + Telegram simulato: 205 messaggi, retry 429, /stat, SIGTERM
 bash scripts/docker-check.sh   # container: build, /health, auth, RO fs, UID non root, SIGTERM
 pnpm typecheck && pnpm build   # webapp standalone
 ```
 
 ## Limiti noti
 
+- I messaggi Telegram ricevuti sono salvati in una inbox SQLite prima della conferma al server, poi elaborati con retry anche dopo un riavvio. Il recupero percorre tutti i lotti disponibili; gli aggiornamenti mai ricevuti scadono sui server Telegram dopo 24 ore. I link di un messaggio vengono tutti elaborati, anche se una conferma in chat fallisce.
 - Arresto completo o pausa del container fermano Telegram. Il riposo automatico ordinario è gestito internamente e arresta soltanto Next. I job vivono nel worker e non sopravvivono al suo riavvio.
 - Upload via web limitati a **16 MiB** per richiesta (proxy HomeGate): oltre, usa il bot.
 - I tag semantici restano uno script di sviluppo (`pnpm auto-tag`): il modello locale non entra nel container.

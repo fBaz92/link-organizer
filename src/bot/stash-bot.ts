@@ -2,9 +2,12 @@ import { rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { Bot, type Context } from "grammy";
 import type { InlineKeyboardButton } from "grammy/types";
 import { isItemType, type Item } from "@/core/domain/item";
+import { logEvent } from "@/service/log";
+import { IngestionError } from "@/core/ingestion";
 import { extractFromEntities, extractUrls } from "@/core/extract-urls";
 import type { StashRuntime } from "@/core/runtime";
 import { rankBySimilarity, similarityFieldsOfItem } from "@/core/similarity";
@@ -38,7 +41,6 @@ import {
 
 const SEARCH_PAGE_SIZE = 5;
 const LUCKY_SIZE = 10;
-const MAX_LINKS_PER_MESSAGE = 3;
 const MAX_TELEGRAM_DOWNLOAD = 20 * 1024 * 1024; // limite Bot API getFile
 const DOWNLOAD_PAGE_SIZE = 8;
 
@@ -71,11 +73,38 @@ export const BOT_COMMANDS = [
 ] as const;
 
 export function createStashBot(botToken: string, options: StashBotOptions): Bot {
-  const bot = new Bot(botToken);
+  const bot = new Bot(botToken, { client: { timeoutSeconds: 35 } });
+  // Telegram flood control applies during backlog recovery too.
+  bot.api.config.use(async (previous, method, payload, signal) => {
+    for (let attempt = 0; ; attempt++) {
+      const result = await previous(method, payload, signal);
+      if (result.ok || result.error_code !== 429 || !result.parameters?.retry_after || attempt >= 3) return result;
+      await delay(result.parameters.retry_after * 1000, undefined, { signal: signal as unknown as AbortSignal });
+    }
+  });
   const { runtime, webAppUrl } = options;
   const searchSessions = new Map<string, SearchState>();
   const downloadSessions = new Map<string, DownloadSession>();
   const pendingKeywordUsers = new Set<number>();
+  const metadataQueue: Item[] = [];
+  let enriching = false;
+  function enrichLater(item: Item): void {
+    metadataQueue.push(item);
+    if (enriching) return;
+    enriching = true;
+    void (async () => {
+      try {
+        for (let next = metadataQueue.shift(); next; next = metadataQueue.shift()) {
+          try { await runtime.ingestion.enrichMetadata(next); }
+          catch (error) { logEvent("warn", "bot_metadata_failed", "Arricchimento non riuscito", { item_id: next.id, error }); }
+        }
+      } finally { enriching = false; }
+    })();
+  }
+  async function confirm(ctx: Context, text: string): Promise<void> {
+    try { await ctx.reply(text, { parse_mode: "HTML" }); }
+    catch (error) { logEvent("warn", "bot_reply_failed", "Conferma Telegram non inviata; archivio conservato", { error }); }
+  }
 
   // ── Middleware: allowlist, sempre per primo ────────────────────────────
   bot.use(async (ctx, next) => {
@@ -147,7 +176,8 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
   // ── Dump: documenti e link ─────────────────────────────────────────────
   bot.on("message:document", (ctx) => handleDocument(ctx));
 
-  bot.on(["message:photo", "message:video", "message:audio", "message:voice", "message:animation"], (ctx) => {
+  bot.on(["message:photo", "message:video", "message:audio", "message:voice", "message:animation"], async (ctx) => {
+    await handleTextDump(ctx);
     return ctx.reply("📤 I file multimediali non sono ancora supportati: per ora Stash archivia link e documenti.");
   });
 
@@ -409,18 +439,22 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
 
   async function handleTextDump(ctx: Context): Promise<void> {
     const message = ctx.message;
-    if (!message?.text) return;
-
+    const text = message?.text ?? message?.caption;
+    if (!text) return;
+    const entities = message?.entities ?? message?.caption_entities;
     const urls = [
-      ...(message.entities ? extractFromEntities(message.text, message.entities) : []),
-      ...extractUrls(message.text),
+      ...(entities ? extractFromEntities(text, entities) : []),
+      ...extractUrls(text),
     ];
-    const unique = [...new Set(urls)].slice(0, MAX_LINKS_PER_MESSAGE);
+    const unique = [...new Set(urls)];
     if (unique.length === 0) return; // testo senza link: non è un dump
 
+    let failure: unknown;
     for (const url of unique) {
-      await ingestAndReply(ctx, { kind: "url", url });
+      try { await ingestAndReply(ctx, { kind: "url", url }); }
+      catch (error) { failure ??= error; }
     }
+    if (failure) throw failure;
   }
 
   async function handleDocument(ctx: Context): Promise<void> {
@@ -432,11 +466,11 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
       return;
     }
 
-    const tempPath = path.join(tmpdir(), `stash-${Date.now()}-${document.file_name ?? "file"}`);
+    const tempPath = path.join(tmpdir(), `stash-${randomBytes(12).toString("hex")}`);
     try {
       const file = await ctx.api.getFile(document.file_id);
       if (!file.file_path) throw new Error("file_path mancante");
-      const response = await fetch(`https://api.telegram.org/file/bot${options.botToken}/${file.file_path}`);
+      const response = await fetch(`https://api.telegram.org/file/bot${options.botToken}/${file.file_path}`, { signal: AbortSignal.timeout(30_000) });
       if (!response.ok) throw new Error(`download HTTP ${response.status}`);
       await writeFile(tempPath, new Uint8Array(await response.arrayBuffer()));
 
@@ -447,7 +481,8 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
         mimeType: document.mime_type,
       });
     } catch (error) {
-      await ctx.reply(`⚠️ Download fallito: ${escapeHtml(String(error))}`);
+      logEvent("warn", "bot_document_failed", "Download documento da ritentare", { error });
+      throw error;
     } finally {
       await rm(tempPath, { force: true });
     }
@@ -467,16 +502,15 @@ export function createStashBot(botToken: string, options: StashBotOptions): Bot 
       });
       if (result.status === "created") {
         const item = result.item;
-        await ctx.reply(createdMessage(item), { parse_mode: "HTML" });
-        // Fire-and-forget: il titolo vero arriva poco dopo, senza bloccare la chat.
-        void runtime.ingestion.enrichMetadata(item).catch((error) => {
-          console.error("[stash] arricchimento fallito:", error);
-        });
+        enrichLater(item);
+        await confirm(ctx, createdMessage(item));
       } else {
-        await ctx.reply(duplicateMessage(result.existing, webAppUrl), { parse_mode: "HTML" });
+        await confirm(ctx, duplicateMessage(result.existing, webAppUrl));
       }
     } catch (error) {
-      await ctx.reply(`⚠️ Archiviazione fallita: ${escapeHtml(String(error))}`);
+      if (error instanceof IngestionError) {
+        await confirm(ctx, `⚠️ Archiviazione fallita: ${escapeHtml(error.message)}`);
+      } else { throw error; }
     }
   }
 

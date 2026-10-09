@@ -8769,7 +8769,7 @@ var require_abort_controller = __commonJS({
         value: "AbortSignal"
       });
     }
-    var AbortController = class {
+    var AbortController2 = class {
       static {
         __name(this, "AbortController");
       }
@@ -8801,21 +8801,21 @@ var require_abort_controller = __commonJS({
       return signal;
     }
     __name(getSignal, "getSignal");
-    Object.defineProperties(AbortController.prototype, {
+    Object.defineProperties(AbortController2.prototype, {
       signal: { enumerable: true },
       abort: { enumerable: true }
     });
     if (typeof Symbol === "function" && typeof Symbol.toStringTag === "symbol") {
-      Object.defineProperty(AbortController.prototype, Symbol.toStringTag, {
+      Object.defineProperty(AbortController2.prototype, Symbol.toStringTag, {
         configurable: true,
         value: "AbortController"
       });
     }
-    exports.AbortController = AbortController;
+    exports.AbortController = AbortController2;
     exports.AbortSignal = AbortSignal2;
-    exports.default = AbortController;
-    module.exports = AbortController;
-    module.exports.AbortController = module.exports["default"] = AbortController;
+    exports.default = AbortController2;
+    module.exports = AbortController2;
+    module.exports.AbortController = module.exports["default"] = AbortController2;
     module.exports.AbortSignal = AbortSignal2;
   }
 });
@@ -12101,14 +12101,14 @@ var require_bot = __commonJS({
       const INITIAL_DELAY = 50;
       let lastDelay = INITIAL_DELAY;
       async function handleError(error) {
-        let delay = false;
+        let delay2 = false;
         let strategy = "rethrow";
         if (error instanceof error_js_1.HttpError) {
-          delay = true;
+          delay2 = true;
           strategy = "retry";
         } else if (error instanceof error_js_1.GrammyError) {
           if (error.error_code >= 500) {
-            delay = true;
+            delay2 = true;
             strategy = "retry";
           } else if (error.error_code === 429) {
             const retryAfterSeconds = error.parameters.retry_after;
@@ -12116,12 +12116,12 @@ var require_bot = __commonJS({
               await sleep(1e3 * retryAfterSeconds, signal);
               lastDelay = INITIAL_DELAY;
             } else {
-              delay = true;
+              delay2 = true;
             }
             strategy = "retry";
           }
         }
-        if (delay) {
+        if (delay2) {
           if (lastDelay !== INITIAL_DELAY) {
             await sleep(lastDelay, signal);
           }
@@ -14873,6 +14873,21 @@ var MIGRATIONS = [
     `ALTER TABLE items ADD COLUMN author_name TEXT`,
     `ALTER TABLE items ADD COLUMN author_url TEXT`,
     `CREATE INDEX IF NOT EXISTS items_author_url_idx ON items (author_url)`
+  ],
+  [
+    // v3: durable Telegram intake, separate from processing and replies.
+    `CREATE TABLE IF NOT EXISTS telegram_inbox_offset (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      next_offset INTEGER NOT NULL
+    )`,
+    `INSERT OR IGNORE INTO telegram_inbox_offset (id, next_offset) VALUES (1, 0)`,
+    `CREATE TABLE IF NOT EXISTS telegram_inbox (
+      update_id INTEGER PRIMARY KEY,
+      update_json TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_attempt INTEGER NOT NULL DEFAULT 0
+    )`,
+    `CREATE INDEX IF NOT EXISTS telegram_inbox_due_idx ON telegram_inbox (next_attempt, update_id)`
   ]
 ];
 
@@ -22765,6 +22780,57 @@ import { rm as rm3, writeFile as writeFile2 } from "node:fs/promises";
 import { randomBytes as randomBytes2 } from "node:crypto";
 import { tmpdir as tmpdir2 } from "node:os";
 import path6 from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+
+// src/service/log.ts
+var SECRET_KEY_PATTERN = /token|password|secret|authorization|cookie/i;
+function scrub(value, depth = 0) {
+  if (depth > 3) return "[\u2026]";
+  if (typeof value === "string") {
+    let redacted = value.replace(/\/bot\d+:[A-Za-z0-9_-]+/g, "/bot[redatto]");
+    for (const key of ["BOT_TOKEN", "WEB_PASSWORD"]) {
+      const secret = process.env[key]?.trim();
+      if (secret) redacted = redacted.split(secret).join("[redatto]");
+    }
+    return redacted;
+  }
+  if (value === null || typeof value !== "object") return value;
+  if (value instanceof Error) {
+    const output2 = {
+      name: scrub(value.name, depth + 1),
+      message: scrub(value.message, depth + 1)
+    };
+    for (const key of ["error", "cause", "code", "errno", "syscall", "hostname", "address", "port", "type", "error_code"]) {
+      if (key in value) {
+        output2[key] = scrub(value[key], depth + 1);
+      }
+    }
+    return output2;
+  }
+  const output = {};
+  for (const [key, item] of Object.entries(value)) {
+    output[key] = SECRET_KEY_PATTERN.test(key) && typeof item === "string" ? "[redatto]" : scrub(item, depth + 1);
+  }
+  return output;
+}
+__name(scrub, "scrub");
+function structuredLine(level, event, summary, fields) {
+  return JSON.stringify({
+    ts: (/* @__PURE__ */ new Date()).toISOString(),
+    level,
+    event,
+    summary,
+    ...fields ? scrub(fields) : {}
+  });
+}
+__name(structuredLine, "structuredLine");
+function logEvent(level, event, summary, fields) {
+  const line = structuredLine(level, event, summary, fields);
+  if (level === "error") console.error(line);
+  else if (level === "warn") console.warn(line);
+  else console.log(line);
+}
+__name(logEvent, "logEvent");
 
 // src/core/extract-urls.ts
 var HTTP_URL = /https?:\/\/[^\s<>"'`)\]}]+/gi;
@@ -22963,7 +23029,6 @@ __name(statMessage, "statMessage");
 // src/bot/stash-bot.ts
 var SEARCH_PAGE_SIZE = 5;
 var LUCKY_SIZE = 10;
-var MAX_LINKS_PER_MESSAGE = 3;
 var MAX_TELEGRAM_DOWNLOAD = 20 * 1024 * 1024;
 var DOWNLOAD_PAGE_SIZE = 8;
 var BOT_COMMANDS = [
@@ -22976,11 +23041,47 @@ var BOT_COMMANDS = [
   { command: "aiuto", description: "Come funziona Stash" }
 ];
 function createStashBot(botToken, options) {
-  const bot = new import_grammy.Bot(botToken);
+  const bot = new import_grammy.Bot(botToken, { client: { timeoutSeconds: 35 } });
+  bot.api.config.use(async (previous, method, payload, signal) => {
+    for (let attempt = 0; ; attempt++) {
+      const result = await previous(method, payload, signal);
+      if (result.ok || result.error_code !== 429 || !result.parameters?.retry_after || attempt >= 3) return result;
+      await delay(result.parameters.retry_after * 1e3, void 0, { signal });
+    }
+  });
   const { runtime, webAppUrl } = options;
   const searchSessions = /* @__PURE__ */ new Map();
   const downloadSessions = /* @__PURE__ */ new Map();
   const pendingKeywordUsers = /* @__PURE__ */ new Set();
+  const metadataQueue = [];
+  let enriching = false;
+  function enrichLater(item) {
+    metadataQueue.push(item);
+    if (enriching) return;
+    enriching = true;
+    void (async () => {
+      try {
+        for (let next = metadataQueue.shift(); next; next = metadataQueue.shift()) {
+          try {
+            await runtime.ingestion.enrichMetadata(next);
+          } catch (error) {
+            logEvent("warn", "bot_metadata_failed", "Arricchimento non riuscito", { item_id: next.id, error });
+          }
+        }
+      } finally {
+        enriching = false;
+      }
+    })();
+  }
+  __name(enrichLater, "enrichLater");
+  async function confirm(ctx, text2) {
+    try {
+      await ctx.reply(text2, { parse_mode: "HTML" });
+    } catch (error) {
+      logEvent("warn", "bot_reply_failed", "Conferma Telegram non inviata; archivio conservato", { error });
+    }
+  }
+  __name(confirm, "confirm");
   bot.use(async (ctx, next) => {
     if (ctx.from && options.allowedUserIds.includes(ctx.from.id)) {
       return next();
@@ -23036,7 +23137,8 @@ ${tags2.map((t) => `#${escapeHtml2(t.name)} \u2014 ${t.count}`).join("\n")}`;
     );
   });
   bot.on("message:document", (ctx) => handleDocument(ctx));
-  bot.on(["message:photo", "message:video", "message:audio", "message:voice", "message:animation"], (ctx) => {
+  bot.on(["message:photo", "message:video", "message:audio", "message:voice", "message:animation"], async (ctx) => {
+    await handleTextDump(ctx);
     return ctx.reply("\u{1F4E4} I file multimediali non sono ancora supportati: per ora Stash archivia link e documenti.");
   });
   bot.on("message:text", async (ctx, next) => {
@@ -23253,16 +23355,24 @@ ${body}`, {
   __name(sendDownloadResults, "sendDownloadResults");
   async function handleTextDump(ctx) {
     const message = ctx.message;
-    if (!message?.text) return;
+    const text2 = message?.text ?? message?.caption;
+    if (!text2) return;
+    const entities = message?.entities ?? message?.caption_entities;
     const urls = [
-      ...message.entities ? extractFromEntities(message.text, message.entities) : [],
-      ...extractUrls(message.text)
+      ...entities ? extractFromEntities(text2, entities) : [],
+      ...extractUrls(text2)
     ];
-    const unique = [...new Set(urls)].slice(0, MAX_LINKS_PER_MESSAGE);
+    const unique = [...new Set(urls)];
     if (unique.length === 0) return;
+    let failure;
     for (const url of unique) {
-      await ingestAndReply(ctx, { kind: "url", url });
+      try {
+        await ingestAndReply(ctx, { kind: "url", url });
+      } catch (error) {
+        failure ??= error;
+      }
     }
+    if (failure) throw failure;
   }
   __name(handleTextDump, "handleTextDump");
   async function handleDocument(ctx) {
@@ -23272,11 +23382,11 @@ ${body}`, {
       await ctx.reply("\u{1F4E6} File oltre i 20MB: Telegram non permette il download ai bot. Caricalo dalla web UI.");
       return;
     }
-    const tempPath = path6.join(tmpdir2(), `stash-${Date.now()}-${document2.file_name ?? "file"}`);
+    const tempPath = path6.join(tmpdir2(), `stash-${randomBytes2(12).toString("hex")}`);
     try {
       const file = await ctx.api.getFile(document2.file_id);
       if (!file.file_path) throw new Error("file_path mancante");
-      const response = await fetch(`https://api.telegram.org/file/bot${options.botToken}/${file.file_path}`);
+      const response = await fetch(`https://api.telegram.org/file/bot${options.botToken}/${file.file_path}`, { signal: AbortSignal.timeout(3e4) });
       if (!response.ok) throw new Error(`download HTTP ${response.status}`);
       await writeFile2(tempPath, new Uint8Array(await response.arrayBuffer()));
       await ingestAndReply(ctx, {
@@ -23286,7 +23396,8 @@ ${body}`, {
         mimeType: document2.mime_type
       });
     } catch (error) {
-      await ctx.reply(`\u26A0\uFE0F Download fallito: ${escapeHtml2(String(error))}`);
+      logEvent("warn", "bot_document_failed", "Download documento da ritentare", { error });
+      throw error;
     } finally {
       await rm3(tempPath, { force: true });
     }
@@ -23302,15 +23413,17 @@ ${body}`, {
       });
       if (result.status === "created") {
         const item = result.item;
-        await ctx.reply(createdMessage(item), { parse_mode: "HTML" });
-        void runtime.ingestion.enrichMetadata(item).catch((error) => {
-          console.error("[stash] arricchimento fallito:", error);
-        });
+        enrichLater(item);
+        await confirm(ctx, createdMessage(item));
       } else {
-        await ctx.reply(duplicateMessage(result.existing, webAppUrl), { parse_mode: "HTML" });
+        await confirm(ctx, duplicateMessage(result.existing, webAppUrl));
       }
     } catch (error) {
-      await ctx.reply(`\u26A0\uFE0F Archiviazione fallita: ${escapeHtml2(String(error))}`);
+      if (error instanceof IngestionError) {
+        await confirm(ctx, `\u26A0\uFE0F Archiviazione fallita: ${escapeHtml2(error.message)}`);
+      } else {
+        throw error;
+      }
     }
   }
   __name(ingestAndReply, "ingestAndReply");
@@ -23344,55 +23457,102 @@ function parseLuckyTag(commandText) {
 }
 __name(parseLuckyTag, "parseLuckyTag");
 
-// src/service/log.ts
-var SECRET_KEY_PATTERN = /token|password|secret|authorization|cookie/i;
-function scrub(value, depth = 0) {
-  if (depth > 3) return "[\u2026]";
-  if (typeof value === "string") {
-    let redacted = value.replace(/\/bot\d+:[A-Za-z0-9_-]+/g, "/bot[redatto]");
-    for (const key of ["BOT_TOKEN", "WEB_PASSWORD"]) {
-      const secret = process.env[key]?.trim();
-      if (secret) redacted = redacted.split(secret).join("[redatto]");
+// src/service/telegram-inbox.ts
+async function startTelegramInbox(bot, raw, options = {}) {
+  const abort = new AbortController();
+  const signal = abort.signal;
+  let stopping = false;
+  const report = /* @__PURE__ */ __name((error) => {
+    try {
+      options.onError?.(error);
+    } catch {
     }
-    return redacted;
-  }
-  if (value === null || typeof value !== "object") return value;
-  if (value instanceof Error) {
-    const output2 = {
-      name: scrub(value.name, depth + 1),
-      message: scrub(value.message, depth + 1)
-    };
-    for (const key of ["error", "cause", "code", "errno", "syscall", "hostname", "address", "port", "type", "error_code"]) {
-      if (key in value) {
-        output2[key] = scrub(value[key], depth + 1);
+  }, "report");
+  const pause = /* @__PURE__ */ __name((ms) => new Promise((resolve) => {
+    if (stopping) return resolve();
+    const done = /* @__PURE__ */ __name(() => {
+      clearTimeout(timer);
+      abort.signal.removeEventListener("abort", done);
+      resolve();
+    }, "done");
+    const timer = setTimeout(done, ms);
+    abort.signal.addEventListener("abort", done, { once: true });
+  }), "pause");
+  const getOffset = raw.prepare("SELECT next_offset FROM telegram_inbox_offset WHERE id = 1");
+  const count2 = raw.prepare("SELECT COUNT(*) AS count FROM telegram_inbox");
+  const insert = raw.prepare("INSERT OR IGNORE INTO telegram_inbox (update_id, update_json) VALUES (?, ?)");
+  const setOffset = raw.prepare("UPDATE telegram_inbox_offset SET next_offset = ? WHERE id = 1");
+  const next = raw.prepare("SELECT update_id, update_json, attempts FROM telegram_inbox WHERE next_attempt <= ? ORDER BY update_id LIMIT 1");
+  const remove = raw.prepare("DELETE FROM telegram_inbox WHERE update_id = ?");
+  const retry = raw.prepare("UPDATE telegram_inbox SET attempts = ?, next_attempt = ? WHERE update_id = ?");
+  await bot.init(signal);
+  await bot.api.deleteWebhook({ drop_pending_updates: false }, signal);
+  options.onStart?.();
+  async function poll() {
+    while (!stopping) {
+      try {
+        const remaining = 1e3 - Number(count2.get().count);
+        if (remaining <= 0) {
+          await pause(100);
+          continue;
+        }
+        const offset = Number(getOffset.get().next_offset);
+        const updates = await bot.api.getUpdates({ offset, limit: Math.min(100, remaining), timeout: 25, allowed_updates: [] }, signal);
+        if (updates.length) {
+          raw.transaction(() => {
+            let nextOffset = offset;
+            for (const update of updates) {
+              insert.run(update.update_id, JSON.stringify(update));
+              nextOffset = Math.max(nextOffset, update.update_id + 1);
+            }
+            setOffset.run(nextOffset);
+          })();
+        } else await pause(25);
+      } catch (error) {
+        if (!stopping) {
+          report(error);
+          await pause(1e3);
+        }
       }
     }
-    return output2;
   }
-  const output = {};
-  for (const [key, item] of Object.entries(value)) {
-    output[key] = SECRET_KEY_PATTERN.test(key) && typeof item === "string" ? "[redatto]" : scrub(item, depth + 1);
+  __name(poll, "poll");
+  async function processPending() {
+    while (!stopping) {
+      try {
+        const row = next.get(Date.now());
+        if (!row) {
+          await pause(50);
+          continue;
+        }
+        try {
+          await bot.handleUpdate(JSON.parse(String(row.update_json)));
+          remove.run(row.update_id);
+        } catch (error) {
+          const attempts = Number(row.attempts) + 1;
+          retry.run(attempts, Date.now() + Math.min(6e4, 1e3 * 2 ** Math.min(attempts - 1, 6)), row.update_id);
+          report(error);
+        }
+      } catch (error) {
+        if (!stopping) {
+          report(error);
+          await pause(1e3);
+        }
+      }
+    }
   }
-  return output;
+  __name(processPending, "processPending");
+  const polling = poll();
+  const processing = processPending();
+  return {
+    async stop() {
+      stopping = true;
+      abort.abort();
+      await Promise.all([polling, processing]);
+    }
+  };
 }
-__name(scrub, "scrub");
-function structuredLine(level, event, summary, fields) {
-  return JSON.stringify({
-    ts: (/* @__PURE__ */ new Date()).toISOString(),
-    level,
-    event,
-    summary,
-    ...fields ? scrub(fields) : {}
-  });
-}
-__name(structuredLine, "structuredLine");
-function logEvent(level, event, summary, fields) {
-  const line = structuredLine(level, event, summary, fields);
-  if (level === "error") console.error(line);
-  else if (level === "warn") console.warn(line);
-  else console.log(line);
-}
-__name(logEvent, "logEvent");
+__name(startTelegramInbox, "startTelegramInbox");
 
 // src/service/web-ui.ts
 import { createReadStream as createReadStream2 } from "node:fs";
@@ -23963,26 +24123,28 @@ async function main() {
     webAppUrl,
     botToken: token
   });
-  bot.catch((error) => {
-    logEvent("error", "bot_update_failed", "Errore nella gestione di un aggiornamento Telegram", {
-      error: error.error
-    });
+  const intake = {};
+  const isStopping = installShutdown(runtime, closeable, async () => {
+    const inbox = await intake.started?.catch(() => void 0);
+    await inbox?.stop();
   });
-  const isStopping = installShutdown(runtime, closeable, bot);
   try {
     await bot.api.setMyCommands(BOT_COMMANDS.map((command) => ({ ...command })));
   } catch (error) {
     logEvent("warn", "bot_commands_failed", "Registrazione dei comandi non riuscita (si prosegue)", { error });
   }
-  bot.start({
+  if (isStopping()) return;
+  intake.started = startTelegramInbox(bot, handle.raw, {
     onStart: /* @__PURE__ */ __name(() => {
       botState = "running";
-      logEvent("info", "bot_started", "Bot Telegram avviato (long polling)", {
+      logEvent("info", "bot_started", "Bot Telegram avviato (coda persistente)", {
         allowed_users: allowed.length,
         upload_chat_configured: process.env.TELEGRAM_UPLOAD_CHAT_ID !== void 0
       });
-    }, "onStart")
-  }).then(() => logEvent("info", "bot_stopped", "Polling del bot terminato")).catch((error) => {
+    }, "onStart"),
+    onError: /* @__PURE__ */ __name((error) => logEvent("error", "bot_update_retry", "Errore Telegram: aggiornamento conservato e ritentato", { error }), "onError")
+  });
+  void intake.started.catch((error) => {
     if (isStopping()) return;
     botState = "failed";
     logEvent("error", "bot_start_failed", "Avvio del bot non riuscito: verificare BOT_TOKEN e rete", { error });
@@ -24025,7 +24187,7 @@ function startThumbnailBackfill(runtime) {
   timer.unref();
 }
 __name(startThumbnailBackfill, "startThumbnailBackfill");
-function installShutdown(runtime, web, bot) {
+function installShutdown(runtime, web, stopIntake) {
   let stopping = false;
   const stop = /* @__PURE__ */ __name((signal) => {
     if (stopping) return;
@@ -24036,7 +24198,7 @@ function installShutdown(runtime, web, bot) {
       process.exit(1);
     }, FORCE_EXIT_MS);
     force.unref();
-    const botStopped = bot?.isRunning() ? bot.stop() : Promise.resolve();
+    const botStopped = stopIntake?.() ?? Promise.resolve();
     const webClosed = Promise.all(web.map((handle) => handle.close()));
     void Promise.allSettled([botStopped, webClosed]).then(async () => {
       try {

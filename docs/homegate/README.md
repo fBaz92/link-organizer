@@ -55,7 +55,7 @@ sudo docker inspect --format '{{json .State}}' homegate-link-organizer
 sudo docker info --format '{{json .Warnings}}'
 ```
 
-Se Docker restituisce memoria zero, verificare gli avvisi relativi ai cgroup sul gateway. Se Docker restituisce memoria positiva e HomeGate mostra zero, il difetto è nel percorso di raccolta o visualizzazione di HomeGate. Questi comandi non sono stati eseguiti sul gateway dell'utente.
+Se Docker restituisce memoria zero, verificare gli avvisi relativi ai cgroup sul gateway. Se Docker restituisce memoria positiva e HomeGate mostra zero, il difetto è nel percorso di raccolta o visualizzazione di HomeGate. La verifica del gateway dell’utente è riportata sotto.
 
 ## Avvio senza HomeGate
 
@@ -80,8 +80,14 @@ Verifica SSH su Raspberry Linux aarch64:
 
 - Bundle 2.1.0 originale: `HttpError` con causa `Expected signal to be an instanceof AbortSignal`. La build esbuild rinomina la classe del polyfill, mentre node-fetch 2 confronta `constructor.name` con `AbortSignal`. La richiesta fallisce prima del trasporto.
 - Build con `--keep-names`: `getMe` completa con `ok: true` nello stesso container e con la stessa configurazione, usando una copia temporanea senza modificare il processo installato.
-- `node scripts/telegram-check.mjs`: prova il bundle effettivo con Telegram simulato su loopback, registra i comandi, inizializza il polling, riceve `/stat`, verifica la risposta e termina con SIGTERM. La verifica fallisce sulla build precedente ed è inclusa nelle verifiche CI e release.
-- `bot_started` viene ora emesso dal callback `onStart` di grammY, dopo l’inizializzazione.
+- `node scripts/telegram-check.mjs`: prova il bundle effettivo con Telegram simulato su loopback, registra i comandi, inizializza il polling, recupera 205 link in tre lotti, verifica tutti gli item e le conferme, ritenta una risposta 429, riceve `/stat` e termina con SIGTERM. La verifica fallisce sulla build precedente ed è inclusa nelle verifiche CI e release.
+- `bot_started` viene ora emesso dopo l’inizializzazione Telegram e la rimozione del webhook, senza eliminare gli aggiornamenti pendenti.
 - Docker restituisce `MemUsage: 0B / 0B` e avvisi `No memory limit support`, `No swap limit support`. Il kernel contiene `cgroup_disable=memory`; `/sys/fs/cgroup/cgroup.controllers` non include `memory`. È un problema di configurazione del gateway, non di metriche pubblicate da Stash. La CPU a `0.00%` da sola non dimostra un guasto.
 
 La correzione della build è inclusa nella 2.2.0 e nel bundle rigenerato. Nessun parametro di boot è stato modificato.
+
+## Messaggi arretrati
+
+Il worker salva ogni lotto ricevuto nella inbox SQLite prima di avanzare l’offset Telegram. L’elaborazione procede separatamente: gli errori restano nella inbox e vengono ritentati anche dopo un riavvio. I link sono deduplicati, quindi ripetere un aggiornamento interrotto non crea altri item. Le risposte rispettano `retry_after`; una conferma non inviata non annulla l’archiviazione né interrompe i link successivi. Gli arricchimenti sono serializzati per evitare molti processi yt-dlp contemporanei durante il recupero.
+
+Il riposo della webapp non interrompe la ricezione. Dopo un arresto completo vengono recuperati tutti gli aggiornamenti ancora disponibili: [Telegram conserva quelli non ricevuti per massimo 24 ore](https://core.telegram.org/bots/api#getting-updates). I messaggi già ricevuti nella inbox restano invece sul volume `/data` fino all’elaborazione. Un arresto tra l’effetto di un comando e la sua registrazione può ripetere quel comando o la sua risposta; la consegna è almeno una volta.
